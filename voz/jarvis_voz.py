@@ -42,9 +42,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import subprocess
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 # --- Rutas y carga de .env del proyecto -------------------------------------
@@ -117,17 +119,12 @@ JARVIS_PROMPT_ACTUAR = (
     f"falta. Si te deniegan, detente y dilo. Mantienes el hilo de la conversacion."
 )
 
-# Frases con las que el usuario cierra la sesion de voz.
+# Frases con las que el usuario cierra la sesion de voz. (Se comparan ya
+# normalizadas: sin tildes ni signos, ver _normalizar.)
 FRASES_SALIR = ("para de escuchar", "apagate", "adios jarvis", "adios travis", "hasta luego", "deja de escuchar")
 
-# Frases con las que JARVIS abre la escena 3D de combate aereo.
-FRASES_SIMULADOR = ("simulador", "escena de guerra", "combate aereo", "combate aéreo",
-                    "aviones de guerra", "escena de combate")
-SIMULADOR_PATH = str(PROJECT_DIR / "simulador_guerra.py")
-
 # Frases con las que JARVIS abre su interfaz visual (HUD estilo Iron Man).
-FRASES_HUD = ("interfaz", "muestrate", "muéstrate", "tu cara", "pantalla", "hud",
-              "tu rostro")
+FRASES_HUD = ("interfaz", "muestrate", "tu cara", "pantalla", "hud", "tu rostro")
 HUD_PATH = str(PROJECT_DIR / "hud" / "jarvis_hud.html")
 
 # Palabras con las que el usuario CONCEDE permiso por voz.
@@ -139,13 +136,27 @@ PALABRAS_NO = ("no", "para", "cancela", "cancelar", "espera", "mejor no",
                "nada", "deten", "detente", "ni hablar")
 
 
+def _normalizar(texto: str) -> str:
+    """Texto en minusculas, sin tildes y sin signos, listo para comparar.
+
+    Whisper transcribe con tildes y puntuacion ('Sí, ¡adelante!'); las listas de
+    palabras estan sin tildes ('si', 'adelante'). Sin esta normalizacion, un
+    'Sí.' hablado NO coincidia con 'si' y el permiso se denegaba aunque el
+    usuario hubiera dicho que si (y 'adiós' nunca cerraba la sesion).
+    """
+    t = unicodedata.normalize("NFD", texto.lower())
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")  # quita tildes
+    t = re.sub(r"[^a-z0-9 ]+", " ", t)                            # quita signos
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _es_afirmativo(texto: str) -> bool:
     """True si la respuesta hablada del usuario es un 'si' a conceder permiso.
 
     Da prioridad a la negacion: si dice 'no' en cualquier parte, es NO. Asi, ante
     la duda, NO se ejecuta la accion sensible (fallar del lado seguro).
     """
-    t = f" {texto.lower().strip()} "
+    t = f" {_normalizar(texto)} "
     if any(f" {p} " in t for p in PALABRAS_NO):
         return False
     return any(f" {p} " in t for p in PALABRAS_SI)
@@ -440,16 +451,6 @@ def _hacer_ask_human_voz(voz: "Voz", recorder, whisper):
     return ask_human
 
 
-def _lanzar_simulador(voz: "Voz") -> None:
-    """Abre la escena 3D de combate aereo en una ventana aparte."""
-    voz.decir("Abriendo el simulador de combate aereo.")
-    try:
-        subprocess.Popen([sys.executable, SIMULADOR_PATH], cwd=str(PROJECT_DIR))
-    except Exception as e:
-        print(f"[sim] No se pudo abrir el simulador: {e}")
-        voz.decir("No he podido abrir el simulador.")
-
-
 def _abrir_hud(voz: "Voz") -> None:
     """Abre la interfaz visual (HUD) de JARVIS en el navegador."""
     voz.decir("Mostrando mi interfaz.")
@@ -507,13 +508,12 @@ def bucle_jarvis(actuar: bool = False) -> None:
                 voz.decir(f"No te he entendido, {USER_NAME}.")
                 continue
             print(f"{USER_NAME}> {texto}")
-            if any(p in texto.lower() for p in FRASES_SALIR):
+            # Normalizado (sin tildes/signos): asi 'Adiós, Travis.' si coincide.
+            texto_cmd = _normalizar(texto)
+            if any(p in texto_cmd for p in FRASES_SALIR):
                 voz.decir(f"Hasta luego, {USER_NAME}.")
                 break
-            if any(p in texto.lower() for p in FRASES_SIMULADOR):
-                _lanzar_simulador(voz)
-                continue
-            if any(p in texto.lower() for p in FRASES_HUD):
+            if any(p in texto_cmd for p in FRASES_HUD):
                 _abrir_hud(voz)
                 continue
             respuesta = loop.run_until_complete(cerebro.preguntar(texto))
@@ -572,8 +572,9 @@ def autoprueba() -> None:
 
     # 5) Reconocedor de permiso por voz (sin micro: solo la logica si/no)
     print("\nPrueba del permiso por voz (logica si/no):")
-    casos = {"si, adelante": True, "vale hazlo": True, "no, espera": False,
-             "mejor no": False, "ni idea": False}
+    # Casos realistas: Whisper transcribe con tildes, mayusculas y puntuacion.
+    casos = {"Sí.": True, "Sí, adelante.": True, "¡Vale, hazlo!": True,
+             "No, espera.": False, "Mejor no...": False, "ni idea": False}
     for frase, esperado in casos.items():
         ok = _es_afirmativo(frase) == esperado
         print(f"   {'OK ' if ok else 'MAL'} '{frase}' -> {_es_afirmativo(frase)} (esperado {esperado})")

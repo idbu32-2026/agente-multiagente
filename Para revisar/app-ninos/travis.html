@@ -194,7 +194,8 @@
 // Vocabulario. Cada ficha: icono (emoji de reserva), palabra, frase para hablar,
 // 'buscar' (palabra para traer el pictograma real de ARASAAC) y 'min' (nivel
 // minimo en que aparece: 1=siempre/los mas basicos ... 3=solo nivel avanzado).
-// Niveles en pantalla: boton "1" = mas simple (menos fichas), "3" = todas.
+// Niveles en pantalla (como los grados de apoyo TEA): boton "1" = verbal,
+// muestra TODO el vocabulario; boton "3" = mas apoyo, muestra solo lo basico.
 // ===========================================================================
 const VOCAB = [
   { titulo:"Quiero / Necesito", clase:"necesidad", fichas:[
@@ -309,7 +310,10 @@ function pintarFrase(){
   for(const t of frase){
     const tk = document.createElement("div");
     tk.className = "token";
-    tk.innerHTML = t.iconoHTML + "<span>" + t.p + "</span>";
+    tk.innerHTML = t.iconoHTML;
+    const sp = document.createElement("span");
+    sp.textContent = t.p;   // texto plano: una palabra con simbolos no rompe la pantalla
+    tk.appendChild(sp);
     elFrase.appendChild(tk);
   }
 }
@@ -325,7 +329,10 @@ document.getElementById("bQuitar").onclick = () => { frase.pop(); pintarFrase();
 // --- Tarjetas personalizadas (las anade un adulto; se guardan en el navegador) ---
 const CLAVE = "travis_custom_v1";
 function cargarCustom(){ try{ return JSON.parse(localStorage.getItem(CLAVE)) || []; }catch(e){ return []; } }
-function guardarCustom(arr){ localStorage.setItem(CLAVE, JSON.stringify(arr)); }
+function guardarCustom(arr){
+  try{ localStorage.setItem(CLAVE, JSON.stringify(arr)); }
+  catch(e){ alert("No queda espacio para guardar más tarjetas. Borra alguna tarjeta con foto e inténtalo de nuevo."); }
+}
 
 // --- Construir el tablero segun el nivel -----------------------------------
 const tablero = document.getElementById("tablero");
@@ -383,7 +390,23 @@ let fotoData = "";
 document.getElementById("mFoto").addEventListener("change", (ev) => {
   const file = ev.target.files[0]; if(!file) return;
   const fr = new FileReader();
-  fr.onload = () => { fotoData = fr.result; document.getElementById("mPrevia").src = fotoData; };
+  fr.onload = () => {
+    // Reducir la foto ANTES de guardarla: una foto de movil pesa varios MB y el
+    // navegador solo permite ~5MB en total; sin esto, con 1-2 fotos se llena el
+    // almacen y las tarjetas nuevas dejan de guardarse.
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 300; // suficiente para la ficha (84px) y la previa
+      const escala = Math.min(1, MAX / Math.max(img.width, img.height));
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(img.width * escala);
+      cv.height = Math.round(img.height * escala);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      fotoData = cv.toDataURL("image/jpeg", 0.8);
+      document.getElementById("mPrevia").src = fotoData;
+    };
+    img.src = fr.result;
+  };
   fr.readAsDataURL(file);
 });
 
@@ -406,8 +429,10 @@ function pintarLista(){
   if(!arr.length){ cont.innerHTML = '<p style="color:#6b7a85">Aún no has añadido tarjetas.</p>'; return; }
   arr.forEach((c, i) => {
     const fila = document.createElement("div"); fila.className="mfila";
-    fila.innerHTML = (c.foto ? '<img src="'+c.foto+'">' : '<span class="em">⭐</span>')
-                   + "<b>"+c.p+"</b><i>"+c.grupo+"</i>";
+    fila.innerHTML = (c.foto ? '<img src="'+c.foto+'">' : '<span class="em">⭐</span>');
+    const negr = document.createElement("b"); negr.textContent = c.p;
+    const cursi = document.createElement("i"); cursi.textContent = c.grupo;
+    fila.appendChild(negr); fila.appendChild(cursi);
     const del = document.createElement("button"); del.textContent="Borrar"; del.className="mdel";
     del.onclick = () => { const a=cargarCustom(); a.splice(i,1); guardarCustom(a); pintarLista(); construir(nivelActual); };
     fila.appendChild(del); cont.appendChild(fila);
