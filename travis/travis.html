@@ -286,18 +286,43 @@ function hablar(texto){
   window.speechSynthesis.speak(u);
 }
 
-// --- Pictogramas reales de ARASAAC (con emoji de reserva si no hay red) -----
+// --- Pictogramas reales de ARASAAC, con CACHE local -------------------------
+// La 1a vez (con internet) cada pictograma se descarga y se guarda en el
+// dispositivo; las siguientes veces carga del almacen local al instante,
+// SIN conexion. Si nunca hubo red para ese picto, se queda el emoji (reserva).
+const PICTOS = "travis_pictos_v1";
+function cachePictos(){ try{ return JSON.parse(localStorage.getItem(PICTOS)) || {}; }catch(e){ return {}; } }
+function guardarPicto(clave, dataUrl){
+  try{
+    const c = cachePictos(); c[clave] = dataUrl;
+    localStorage.setItem(PICTOS, JSON.stringify(c));
+  }catch(e){ /* almacen lleno: ese picto seguira necesitando red, no pasa nada */ }
+}
+function mostrarImagen(elIcono, src, alt){
+  const img = new Image();
+  img.alt = alt;
+  img.onload = () => { elIcono.innerHTML = ""; elIcono.appendChild(img); };
+  img.src = src;
+}
 async function ponerPictograma(elIcono, ficha){
+  const enCache = cachePictos()[ficha.b];
+  if(enCache){ mostrarImagen(elIcono, enCache, ficha.p); return; }
   try{
     const r = await fetch("https://api.arasaac.org/api/pictograms/es/search/" + encodeURIComponent(ficha.b));
     if(!r.ok) return;
     const data = await r.json();
     if(Array.isArray(data) && data.length){
       const id = data[0]._id;
-      const img = new Image();
-      img.alt = ficha.p;
-      img.onload = () => { elIcono.innerHTML = ""; elIcono.appendChild(img); };
-      img.src = "https://static.arasaac.org/pictograms/" + id + "/" + id + "_300.png";
+      // Descargamos la imagen y la convertimos a texto guardable (dataURL).
+      const ri = await fetch("https://static.arasaac.org/pictograms/" + id + "/" + id + "_300.png");
+      if(!ri.ok) return;
+      const blob = await ri.blob();
+      const fr = new FileReader();
+      fr.onload = () => {
+        guardarPicto(ficha.b, fr.result);
+        mostrarImagen(elIcono, fr.result, ficha.p);
+      };
+      fr.readAsDataURL(blob);
     }
   }catch(e){ /* sin red: se queda el emoji */ }
 }
