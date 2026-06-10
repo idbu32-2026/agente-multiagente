@@ -41,12 +41,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 # --- Rutas y carga de .env del proyecto -------------------------------------
@@ -155,7 +159,53 @@ FRASES_SALIR = ("para de escuchar", "apagate", "adios jarvis", "adios travis", "
 
 # Frases con las que JARVIS abre su interfaz visual (HUD estilo Iron Man).
 FRASES_HUD = ("interfaz", "muestrate", "tu cara", "pantalla", "hud", "tu rostro")
-HUD_PATH = str(PROJECT_DIR / "hud" / "jarvis_hud.html")
+HUD_DIR = PROJECT_DIR / "hud"
+HUD_PATH = str(HUD_DIR / "jarvis_hud.html")
+HUD_PORT = int(os.getenv("JARVIS_HUD_PORT", "8765"))
+HUD_URL = f"http://127.0.0.1:{HUD_PORT}/jarvis_hud.html"
+_HUD_SERVIDOR = None  # se arranca en bucle_jarvis; None = HUD estatico (archivo)
+
+
+def _escribir_estado(estado: str, usuario: str = "", jarvis: str = "") -> None:
+    """Publica el estado de JARVIS para que el HUD lo muestre en vivo.
+
+    estados: esperando | escuchando | pensando | hablando. El HUD lo lee de
+    hud/estado.json cada medio segundo. Si falla la escritura, no pasa nada:
+    el HUD simplemente se queda estatico.
+    """
+    try:
+        HUD_DIR.mkdir(exist_ok=True)
+        (HUD_DIR / "estado.json").write_text(
+            json.dumps({"estado": estado, "usuario": usuario, "jarvis": jarvis,
+                        "ts": time.time()}),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+class _HUDHandler(SimpleHTTPRequestHandler):
+    def log_message(self, *args):  # silenciar el log de cada peticion
+        pass
+
+
+def _arrancar_servidor_hud():
+    """Sirve la carpeta hud/ en localhost para que el HUD pueda leer estado.json.
+
+    (Abierto como archivo suelto, el navegador bloquea esas lecturas; servido
+    por http funcionan.) Si el puerto esta ocupado (otro JARVIS abierto),
+    devuelve None y el HUD se abrira en modo estatico.
+    """
+    global _HUD_SERVIDOR
+    try:
+        servidor = ThreadingHTTPServer(
+            ("127.0.0.1", HUD_PORT), partial(_HUDHandler, directory=str(HUD_DIR))
+        )
+    except OSError:
+        return None
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    _HUD_SERVIDOR = servidor
+    return servidor
 
 # Palabras con las que el usuario CONCEDE permiso por voz.
 PALABRAS_SI = ("si", "sis", "vale", "claro", "adelante", "hazlo", "autorizo",
@@ -500,10 +550,15 @@ def _hacer_ask_human_voz(voz: "Voz", recorder, whisper):
 
 
 def _abrir_hud(voz: "Voz") -> None:
-    """Abre la interfaz visual (HUD) de JARVIS en el navegador."""
+    """Abre la interfaz visual (HUD) de JARVIS en el navegador.
+
+    Si el mini-servidor esta activo se abre la version EN VIVO (muestra estado
+    y conversacion); si no, el archivo estatico de siempre.
+    """
     voz.decir("Mostrando mi interfaz.")
+    destino = HUD_URL if _HUD_SERVIDOR is not None else HUD_PATH
     try:
-        os.startfile(HUD_PATH)  # Windows: abre el HTML en el navegador por defecto
+        os.startfile(destino)  # Windows: navegador por defecto
     except Exception as e:
         print(f"[hud] No se pudo abrir la interfaz: {e}")
         voz.decir("No he podido abrir la interfaz.")
@@ -527,6 +582,8 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
     voz = Voz(nombre=nombre.upper())
     whisper = _cargar_whisper()
     oww = _cargar_wakeword()  # openWakeWord: local, sin clave ni cuenta
+    _arrancar_servidor_hud()  # HUD en vivo (di "muestrate" para abrirlo)
+    _escribir_estado("esperando")
 
     recorder = PvRecorder(device_index=int(os.getenv("MIC_INDEX", "-1")),
                           frame_length=FRAME_LENGTH)
@@ -559,12 +616,14 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             _esperar_palabra_clave(recorder, oww)
             # Detectada la palabra "Hey Jarvis".
             print("[voz] Te escucho...")
+            _escribir_estado("escuchando")
             voz.decir("¿Sí?")
             _drenar_microfono(recorder)          # anti-eco: descarta el "¿Sí?"
             audio = _grabar_mandato(recorder)
             texto = _transcribir(whisper, audio)
             if not texto:
                 voz.decir(f"No te he entendido, {USER_NAME}.")
+                _escribir_estado("esperando")
                 continue
             print(f"{USER_NAME}> {texto}")
             # Normalizado (sin tildes/signos): asi 'Adiós, Travis.' si coincide.
@@ -574,9 +633,13 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
                 break
             if any(p in texto_cmd for p in FRASES_HUD):
                 _abrir_hud(voz)
+                _escribir_estado("esperando", texto)
                 continue
+            _escribir_estado("pensando", texto)
             respuesta = loop.run_until_complete(cerebro.preguntar(texto))
+            _escribir_estado("hablando", texto, respuesta)
             voz.decir(respuesta)
+            _escribir_estado("esperando", texto, respuesta)
     except KeyboardInterrupt:
         print("\n[voz] Cerrando JARVIS...")
     finally:

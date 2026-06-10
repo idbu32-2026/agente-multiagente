@@ -10,3 +10,6 @@ venv/
 
 # Logs del servidor
 *.log
+
+# Estado en vivo del HUD (lo escribe jarvis_voz.py al correr)
+hud/estado.json

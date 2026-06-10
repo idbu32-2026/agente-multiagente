@@ -24,6 +24,11 @@
   .estado { position:absolute; bottom:92px; width:100%; text-align:center; font-size:.9rem; letter-spacing:.35rem; }
   .punto { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--cian); box-shadow:var(--glow); margin-right:10px; vertical-align:middle; animation:parp 1.4s infinite; }
   @keyframes parp { 50%{opacity:.35} }
+  /* Conversacion en vivo (lo que dijiste y lo que responde JARVIS) */
+  .dialogo { position:absolute; bottom:132px; left:50%; transform:translateX(-50%);
+    width:min(720px,86vw); text-align:center; font-size:.95rem; line-height:1.6; }
+  .dialogo .dUser { opacity:.55; font-size:.78rem; letter-spacing:.12rem; }
+  .dialogo .dJarvis { text-shadow:var(--glow); margin-top:4px; max-height:7.5em; overflow:hidden; }
   .selector { position:fixed; bottom:30px; width:100%; display:flex; gap:14px; justify-content:center; z-index:3; }
   .selector button { pointer-events:auto; cursor:pointer; background:rgba(0,30,40,.6); color:var(--cian);
     border:1px solid var(--cian); padding:8px 16px; font-family:inherit; letter-spacing:.15rem; font-size:.8rem;
@@ -43,6 +48,7 @@
     <div class="lado izq" id="ladoIzq"></div>
     <div class="lado der" id="ladoDer"></div>
     <div class="estado"><span class="punto"></span><span id="estadoTexto">SISTEMAS EN LÍNEA</span></div>
+    <div class="dialogo" id="dialogo"></div>
   </div>
   <div class="selector" id="selector"></div>
   <div id="err"></div>
@@ -153,8 +159,27 @@ try {
 
   const hx=n=>Math.floor(Math.random()*16**n).toString(16).toUpperCase().padStart(n,'0');
   setInterval(()=>{ let a="",b=""; for(let i=0;i<16;i++){a+=`0x${hx(4)}  ${(Math.random()*100).toFixed(1)}%\n`;b+=`${hx(6)}  ·\n`;} ladoIzq.innerText=a; ladoDer.innerText=b; },1100);
+  // --- Conexion EN VIVO con jarvis_voz.py -----------------------------------
+  // Si JARVIS esta corriendo (sirve hud/ en localhost y escribe estado.json),
+  // el HUD muestra su estado REAL y la conversacion. Si se abre como archivo
+  // suelto, el fetch falla y se queda el modo demo de siempre.
   let demo=['online','listening','thinking','speaking'],di=0;
-  setInterval(()=>window.setEstado(demo[di++%demo.length]),3000);
+  let demoTimer=setInterval(()=>window.setEstado(demo[di++%demo.length]),3000);
+  const MAPA={esperando:'online',escuchando:'listening',pensando:'thinking',hablando:'speaking'};
+  const dlg=document.getElementById('dialogo');
+  async function refrescar(){
+    try{
+      const r=await fetch('estado.json',{cache:'no-store'});
+      if(!r.ok) return;
+      const e=await r.json();
+      if(demoTimer){ clearInterval(demoTimer); demoTimer=null; }  // modo real
+      window.setEstado(MAPA[e.estado]||'online');
+      dlg.innerHTML='';
+      if(e.usuario){ const d=document.createElement('div'); d.className='dUser'; d.textContent='› '+e.usuario; dlg.appendChild(d); }
+      if(e.jarvis){ const d=document.createElement('div'); d.className='dJarvis'; d.textContent=e.jarvis; dlg.appendChild(d); }
+    }catch(_){ /* sin servidor: modo demo */ }
+  }
+  setInterval(refrescar,400); refrescar();
 } catch(e) {
   document.getElementById('err').innerText = 'Error 3D: ' + e.message;
 }
