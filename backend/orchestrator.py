@@ -14,6 +14,7 @@ humano via el callback `can_use_tool`.
 from __future__ import annotations
 
 import os
+import re
 from typing import Awaitable, Callable
 
 from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
@@ -31,6 +32,26 @@ AUTO_APPROVED_TOOLS = ["Read", "Grep", "Glob", "WebSearch", "WebFetch"]
 # del proyecto (autonomia con limites). Borrar y comandos (Bash) NUNCA se
 # auto-aprueban: siempre piden permiso humano.
 SAFE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+
+# REGLA FIJA DE LUIS (en codigo, no en un modal): el agente NUNCA borra.
+# Comandos de borrado en Bash/PowerShell se deniegan automaticamente, sin
+# siquiera preguntar — asi un "aprobar" despistado no puede borrar nada.
+_PATRON_BORRADO = re.compile(
+    r"\b(rm|del|erase|rmdir|rd|remove-item|ri|format|mklink\s+/d\s+\S+\s+nul)\b",
+    re.IGNORECASE,
+)
+
+def comando_prohibido(tool_name: str, input_data: dict) -> str | None:
+    """Devuelve el motivo si la accion viola una regla fija; None si es aceptable."""
+    if tool_name == "Bash":
+        comando = str(input_data.get("command", ""))
+        if _PATRON_BORRADO.search(comando):
+            return (
+                "Regla fija: NUNCA borrar archivos ni carpetas. En su lugar, "
+                "mueve lo que sobre a la carpeta 'Para revisar' y avisa al usuario."
+            )
+    return None
 
 
 def _is_inside_project(path: str) -> bool:
@@ -100,6 +121,12 @@ def build_options(ask_human: AskHuman) -> ClaudeAgentOptions:
         # Importacion local para no fallar si el SDK aun no esta instalado al
         # importar este modulo en herramientas/tests.
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+
+        # REGLA FIJA: borrar esta prohibido SIEMPRE (ni siquiera se pregunta).
+        motivo = comando_prohibido(tool_name, input_data)
+        if motivo:
+            print(f"[bloqueado] {tool_name}: {motivo}", flush=True)
+            return PermissionResultDeny(message=motivo, interrupt=False)
 
         # AUTONOMIA CON LIMITES: escribir/editar DENTRO del proyecto se auto-aprueba.
         # Borrar, comandos (Bash) o rutas fuera del proyecto -> piden permiso.

@@ -77,10 +77,38 @@ WAKE_UMBRAL = float(os.getenv("JARVIS_WAKE_UMBRAL", "0.4"))
 FRAME_LENGTH = 1280
 SAMPLE_RATE = 16000
 
-# Persona de TRAVIS: companero de voz para ninos con autismo. En espanol.
+# Reglas de precision de Luis (las mismas que aplica su asesor de Claude Code):
+# no inventar, decir "no lo se", buscar lo actual en la web, separar hecho de
+# suposicion, corregir sin excusas, respuestas cortas (es voz).
+REGLAS_PRECISION = (
+    "\nREGLAS DE PRECISION (no negociables):\n"
+    "- No afirmes nada importante sin estar seguro. Si no lo sabes, di 'no lo "
+    "se' — NUNCA rellenes huecos inventando.\n"
+    "- Para datos actuales o que cambian (noticias, precios, resultados, "
+    "versiones, fechas) BUSCA en la web antes de responder; no respondas de "
+    "memoria.\n"
+    "- Separa hecho comprobado de suposicion: si supones, dilo ('creo que...', "
+    "'no estoy seguro').\n"
+    "- Di de donde sale el dato cuando importe (que web, que archivo).\n"
+    "- Si te corrigen con razon, reconocelo y corrige sin excusas. Si crees que "
+    "el usuario se equivoca, diselo con respeto y explica por que; no le des "
+    "la razon por sistema.\n"
+    "- Respuestas CORTAS: es una conversacion por voz. Lo esencial primero.\n"
+)
+
+# Persona de JARVIS (modo por defecto): el asistente personal de Luis, con
+# busqueda web y las reglas de precision integradas.
+JARVIS_PROMPT_CHARLA = (
+    f"Eres Jarvis, el asistente personal de voz de {USER_NAME}. Hablas en "
+    "espanol con frases cortas y naturales: es una conversacion hablada. "
+    "Puedes buscar en la web cuando haga falta. Mantienes el hilo de la "
+    "conversacion." + REGLAS_PRECISION
+)
+
+# Persona de TRAVIS (modo --ninos): companero de voz para ninos con autismo.
 # Diseno basado en pautas de comunicacion para TEA: lenguaje literal y claro,
 # frases muy cortas, tono calmado, predecible, refuerzo positivo. NO es terapia.
-JARVIS_SYSTEM_PROMPT = (
+TRAVIS_SYSTEM_PROMPT = (
     f"Eres Travis, un companero de voz amable y MUY paciente para {USER_NAME}, "
     "un nino. Hablas en espanol. Tu trabajo es acompanar, calmar y ayudar a "
     "comunicarse. No ensenas a la fuerza ni corriges.\n"
@@ -109,14 +137,16 @@ JARVIS_SYSTEM_PROMPT = (
 
 # Persona de JARVIS en modo ACTUAR: ademas de conversar, puede actuar sobre el PC.
 JARVIS_PROMPT_ACTUAR = (
-    f"Eres Travis, el asistente personal de {USER_NAME}, y hablas por voz. "
+    f"Eres Jarvis, el asistente personal de {USER_NAME}, y hablas por voz. "
     "Responde en espanol con frases CORTAS y naturales. Ademas de conversar y "
     "buscar en la web, puedes ACTUAR en el ordenador: leer, crear y editar "
     f"archivos del proyecto, y ejecutar tareas. Trabajas en: {PROJECT_DIR}. Usa "
     "SIEMPRE rutas dentro de ese directorio. Antes de cualquier accion con efectos "
-    "(crear/editar/borrar archivos o ejecutar comandos) explicaras en una frase "
+    "(crear/editar archivos o ejecutar comandos) explicaras en una frase "
     "que vas a hacer; el sistema pedira permiso al usuario por voz cuando haga "
-    f"falta. Si te deniegan, detente y dilo. Mantienes el hilo de la conversacion."
+    "falta. BORRAR esta prohibido siempre: si algo sobra, muevelo a la carpeta "
+    "'Para revisar' y avisa. Si te deniegan, detente y dilo. Mantienes el hilo "
+    "de la conversacion." + REGLAS_PRECISION
 )
 
 # Frases con las que el usuario cierra la sesion de voz. (Se comparan ya
@@ -175,19 +205,30 @@ class Cerebro:
     mismo loop para hablar con el cerebro.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, ninos: bool = False) -> None:
         self._client = None
+        self._ninos = ninos
 
     async def _opciones(self):
         """Opciones del SDK para este cerebro. Las subclases la sobreescriben."""
         from claude_agent_sdk import ClaudeAgentOptions
 
-        return ClaudeAgentOptions(
-            model=os.getenv("CHAT_MODEL", "claude-sonnet-4-6"),
-            system_prompt=JARVIS_SYSTEM_PROMPT,
+        if self._ninos:
             # SEGURIDAD INFANTIL: sin web ni herramientas. Travis solo conversa,
             # asi no hay riesgo de contenido inapropiado desde internet.
-            allowed_tools=[],
+            return ClaudeAgentOptions(
+                model=os.getenv("CHAT_MODEL", "claude-sonnet-4-6"),
+                system_prompt=TRAVIS_SYSTEM_PROMPT,
+                allowed_tools=[],
+                permission_mode="dontAsk",
+                cwd=str(PROJECT_DIR),
+                max_turns=8,
+            )
+        # JARVIS por defecto: charla + busqueda web (solo lectura, no toca el PC).
+        return ClaudeAgentOptions(
+            model=os.getenv("CHAT_MODEL", "claude-sonnet-4-6"),
+            system_prompt=JARVIS_PROMPT_CHARLA,
+            allowed_tools=["WebSearch", "WebFetch"],
             permission_mode="dontAsk",  # deniega cualquier herramienta no permitida
             cwd=str(PROJECT_DIR),
             max_turns=8,
@@ -244,11 +285,17 @@ class CerebroActuador(Cerebro):
             AUTO_APPROVED_TOOLS,
             SAFE_WRITE_TOOLS,
             _is_inside_project,
+            comando_prohibido,
         )
 
         ask_human = self._ask_human
 
         async def can_use_tool(tool_name: str, input_data: dict, context) -> object:
+            # REGLA FIJA: borrar esta prohibido SIEMPRE (ni se pregunta por voz;
+            # asi un "si" despistado no puede borrar nada).
+            motivo = comando_prohibido(tool_name, input_data)
+            if motivo:
+                return PermissionResultDeny(message=motivo, interrupt=False)
             # Escribir/editar DENTRO del proyecto -> auto-aprobado (autonomia con limites).
             if tool_name in SAFE_WRITE_TOOLS and _is_inside_project(input_data.get("file_path", "")):
                 print(f"[auto] {tool_name} dentro del proyecto -> auto-aprobado: {input_data.get('file_path')}", flush=True)
@@ -286,7 +333,8 @@ class Voz:
     una sola vez aqui (solo lee la lista de voces, no reproduce nada).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, nombre: str = "JARVIS") -> None:
+        self.nombre = nombre
         # Voz mas lenta y calmada (mejor para ninos con autismo). Ajustable.
         self.rate = int(os.getenv("JARVIS_TTS_RATE", "150"))
         self.voice_id = self._elegir_voz_espanol()
@@ -311,7 +359,7 @@ class Voz:
         return ""
 
     def decir(self, texto: str) -> None:
-        print(f"TRAVIS> {texto}")
+        print(f"{self.nombre}> {texto}")
         try:
             subprocess.run(
                 [sys.executable, self._worker, str(self.rate), self.voice_id],
@@ -461,16 +509,22 @@ def _abrir_hud(voz: "Voz") -> None:
         voz.decir("No he podido abrir la interfaz.")
 
 
-def bucle_jarvis(actuar: bool = False) -> None:
+def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
     """Bucle principal: escucha 'Jarvis', te entiende y te responde por voz.
 
     El audio es sincrono; el cerebro vive en un unico event loop persistente
     para conservar la conexion del SDK (y con ella la memoria de la charla).
-    Si `actuar` es True, JARVIS puede tocar el PC pidiendo permiso por voz.
+    `actuar`: JARVIS puede tocar el PC pidiendo permiso por voz.
+    `ninos`:  persona Travis para ninos (sin internet ni herramientas).
     """
     from pvrecorder import PvRecorder
 
-    voz = Voz()
+    if ninos and actuar:
+        print("[seguridad] El modo ninos NO puede actuar sobre el PC; se ignora --actuar.")
+        actuar = False
+    nombre = "Travis" if ninos else "Jarvis"
+
+    voz = Voz(nombre=nombre.upper())
     whisper = _cargar_whisper()
     oww = _cargar_wakeword()  # openWakeWord: local, sin clave ni cuenta
 
@@ -484,16 +538,21 @@ def bucle_jarvis(actuar: bool = False) -> None:
         ask_human = _hacer_ask_human_voz(voz, recorder, whisper)
         cerebro: Cerebro = CerebroActuador(ask_human)
     else:
-        cerebro = Cerebro()
+        cerebro = Cerebro(ninos=ninos)
     loop.run_until_complete(cerebro.abrir())
 
     recorder.start()
-    modo = "ACTUAR (puede tocar el PC, pide permiso por voz)" if actuar else "CHARLA (solo conversa y busca)"
+    if actuar:
+        modo = "ACTUAR (puede tocar el PC, pide permiso por voz)"
+    elif ninos:
+        modo = "NINOS (Travis: solo conversa, sin internet)"
+    else:
+        modo = "CHARLA (conversa y busca en la web)"
     print("\n========================================")
-    print(f"  TRAVIS activo - modo {modo}.")
+    print(f"  {nombre.upper()} activo - modo {modo}.")
     print("  Di 'Hey Jarvis' para despertarlo. (Ctrl+C para salir)")
     print("========================================\n")
-    voz.decir(f"Hola {USER_NAME}. Soy Travis. Estoy aqui contigo.")
+    voz.decir(f"Hola {USER_NAME}. Soy {nombre}. Te escucho.")
 
     try:
         while True:
@@ -565,7 +624,7 @@ def autoprueba() -> None:
     # 4) Voz de salida
     try:
         v = Voz()
-        v.decir(f"Hola {USER_NAME}, soy Travis. La voz funciona.")
+        v.decir(f"Hola {USER_NAME}, soy Jarvis. La voz funciona.")
         print("Voz de salida: OK (deberías haberla oído)")
     except Exception as e:
         print(f"Voz de salida: ERROR -> {e}")
@@ -619,11 +678,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="JARVIS — capa de voz")
     parser.add_argument("--check", action="store_true", help="prueba las piezas sin arrancar el bucle")
     parser.add_argument("--actuar", action="store_true", help="permite que JARVIS actue sobre el PC (pide permiso por voz)")
+    parser.add_argument("--ninos", action="store_true", help="modo Travis para ninos: solo conversa, sin internet ni herramientas")
     args = parser.parse_args()
     if args.check:
         autoprueba()
     else:
-        bucle_jarvis(actuar=args.actuar)
+        bucle_jarvis(actuar=args.actuar, ninos=args.ninos)
 
 
 if __name__ == "__main__":
