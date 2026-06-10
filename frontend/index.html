@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sistema Multiagente</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --txt:#e6e6e6; --mut:#8a93a2; --acc:#5b8cff; --ok:#2ecc71; --no:#ff5b5b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600; }
+  header small { color:var(--mut); font-weight:400; }
+  #log { padding:18px; max-width:860px; margin:0 auto; display:flex; flex-direction:column; gap:10px; }
+  .msg { padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel); white-space:pre-wrap; }
+  .msg .who { color:var(--mut); font-size:12px; margin-bottom:4px; text-transform:uppercase; letter-spacing:.04em; }
+  .tool { border-left:3px solid var(--acc); }
+  .error { border-left:3px solid var(--no); }
+  .result { color:var(--mut); font-size:13px; }
+  form { position:sticky; bottom:0; display:flex; gap:8px; padding:14px 18px; background:var(--bg); border-top:1px solid var(--line); max-width:860px; margin:0 auto; width:100%; }
+  input[type=text] { flex:1; padding:10px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--txt); }
+  button { padding:10px 16px; border-radius:8px; border:0; background:var(--acc); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); }
+  /* Modal de checkpoint */
+  #overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; }
+  #modal { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; width:min(560px,92vw); }
+  #modal h3 { margin:0 0 8px; }
+  #modal pre { background:#0b0d11; border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; max-height:200px; font-size:13px; }
+  .row { display:flex; gap:10px; margin-top:14px; }
+  .approve { background:var(--ok); } .deny { background:var(--no); }
+</style>
+</head>
+<body>
+  <header>Sistema Multiagente <small>· Claude Agent SDK · semi-autonomo con checkpoints</small></header>
+  <div id="log"></div>
+
+  <form id="form">
+    <input id="goal" type="text" placeholder="Describe el objetivo para el orquestador..." autocomplete="off" />
+    <button type="submit">Enviar</button>
+  </form>
+
+  <div id="overlay">
+    <div id="modal">
+      <h3>Checkpoint: aprobar accion</h3>
+      <div>El agente quiere usar la herramienta <b id="m-tool"></b>:</div>
+      <pre id="m-input"></pre>
+      <input id="m-reason" type="text" placeholder="Motivo (opcional)" style="width:100%;margin-top:10px;padding:8px;border-radius:8px;border:1px solid var(--line);background:#0b0d11;color:var(--txt)" />
+      <div class="row">
+        <button class="approve" id="m-approve">Aprobar</button>
+        <button class="deny" id="m-deny">Denegar</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const log = document.getElementById('log');
+const form = document.getElementById('form');
+const goalInput = document.getElementById('goal');
+const overlay = document.getElementById('overlay');
+let pendingApprovalId = null;
+
+function add(text, cls, who) {
+  const el = document.createElement('div');
+  el.className = 'msg' + (cls ? ' ' + cls : '');
+  if (who) { const w = document.createElement('div'); w.className = 'who'; w.textContent = who; el.appendChild(w); }
+  el.appendChild(document.createTextNode(text));
+  log.appendChild(el);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+const ws = new WebSocket(`${proto}://${location.host}/ws`);
+ws.onopen = () => add('Conectado al servidor.', 'result');
+ws.onclose = () => add('Conexion cerrada.', 'error');
+
+ws.onmessage = (ev) => {
+  const m = JSON.parse(ev.data);
+  switch (m.type) {
+    case 'agent':  add(m.text, '', m.role); break;
+    case 'tool':   add(`${m.name}  ${JSON.stringify(m.input)}`, 'tool', 'herramienta'); break;
+    case 'result': add(`Coste: $${(m.cost_usd ?? 0).toFixed(4)}`, 'result'); break;
+    case 'error':  add(m.text, 'error', 'error'); break;
+    case 'done':   add('— tarea finalizada —', 'result'); break;
+    case 'approval_request': showCheckpoint(m); break;
+  }
+};
+
+// Cola de aprobaciones: si el agente pide varios permisos seguidos, se muestran
+// de uno en uno (antes la segunda peticion machacaba a la primera y el agente
+// se quedaba colgado esperando una respuesta que nunca llegaba).
+const approvalQueue = [];
+
+function showCheckpoint(m) {
+  approvalQueue.push(m);
+  if (pendingApprovalId === null) showNextApproval();
+}
+
+function showNextApproval() {
+  const m = approvalQueue.shift();
+  if (!m) { overlay.style.display = 'none'; pendingApprovalId = null; return; }
+  pendingApprovalId = m.id;
+  document.getElementById('m-tool').textContent = m.tool;
+  document.getElementById('m-input').textContent = JSON.stringify(m.input, null, 2);
+  document.getElementById('m-reason').value = '';
+  overlay.style.display = 'flex';
+}
+
+function respond(approved) {
+  ws.send(JSON.stringify({
+    type: 'approval_response',
+    id: pendingApprovalId,
+    approved,
+    reason: document.getElementById('m-reason').value,
+  }));
+  pendingApprovalId = null;
+  showNextApproval();
+}
+
+document.getElementById('m-approve').onclick = () => respond(true);
+document.getElementById('m-deny').onclick = () => respond(false);
+
+form.onsubmit = (e) => {
+  e.preventDefault();
+  const text = goalInput.value.trim();
+  if (!text) return;
+  add(text, '', 'objetivo');
+  ws.send(JSON.stringify({ type: 'goal', text }));
+  goalInput.value = '';
+};
+</script>
+</body>
+</html>

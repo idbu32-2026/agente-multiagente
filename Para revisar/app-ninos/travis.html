@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Travis — comunicación para todos</title>
+<style>
+  /* Diseno calmado y predecible para tablet y para ninos (incluido TEA):
+     pictogramas grandes, poco texto, colores suaves, sin animaciones bruscas. */
+  :root{
+    --fondo:#eef4f7; --barra:#ffffff; --texto:#26323a; --suave:#6b7a85;
+    --linea:#d9e2e8; --acento:#7fb3d5; --acento2:#5b8cb0;
+    --emocion:#fbe7c6; --necesidad:#cfe8d8; --accion:#dfe3f3; --gente:#f3d9e2;
+    --comida:#fde0d0; --verbo:#d9efe6; --lugar:#d6e8f5; --cuerpo:#f6d5d5; --juego:#e6dcf2;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{font-family:system-ui,Segoe UI,Roboto,sans-serif; background:var(--fondo);
+       color:var(--texto); display:flex; flex-direction:column;}
+
+  header{background:var(--barra); border-bottom:1px solid var(--linea);
+         padding:10px 16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;}
+  .logo{font-size:24px; font-weight:700;}
+  .logo small{color:var(--suave); font-weight:500; font-size:14px;}
+  .niveles{margin-left:auto; display:flex; gap:8px; align-items:center;}
+  .niveles span{color:var(--suave); font-size:14px; margin-right:4px;}
+  .niv{border:2px solid var(--linea); background:#fff; border-radius:12px;
+       padding:8px 14px; font-size:16px; font-weight:600; cursor:pointer; color:var(--suave);}
+  .niv.activo{background:var(--acento2); border-color:var(--acento2); color:#fff;}
+
+  /* Tira de frase: se van anadiendo los pictos tocados y Travis dice la frase. */
+  #tira{background:#fff; border-bottom:1px solid var(--linea);
+        display:flex; align-items:center; gap:10px; padding:10px 16px; min-height:92px;}
+  #frase{flex:1; display:flex; gap:8px; overflow-x:auto; min-height:72px; align-items:center;}
+  #frase:empty::before{content:"Toca los dibujos para formar una frase…"; color:var(--suave); font-size:16px;}
+  .token{display:flex; flex-direction:column; align-items:center; gap:2px;
+         background:var(--fondo); border:1px solid var(--linea); border-radius:12px; padding:6px 8px; min-width:64px;}
+  .token img,.token .emoji{width:46px; height:46px; object-fit:contain; font-size:38px; line-height:46px; text-align:center;}
+  .token span{font-size:13px;}
+  .btnfrase{border:0; border-radius:14px; width:64px; height:64px; font-size:28px; cursor:pointer; color:#fff;}
+  .reproducir{background:#3aa66e;} .borrar{background:#c98; } .quitar{background:#b0bcc4;}
+
+  main{flex:1; overflow:auto; padding:16px;}
+  .grupo{margin-bottom:20px;}
+  .grupo h2{margin:0 0 10px; font-size:16px; color:var(--suave); font-weight:700;
+            text-transform:uppercase; letter-spacing:.04em;}
+  .rejilla{display:grid; gap:14px; grid-template-columns:repeat(auto-fill, minmax(140px,1fr));}
+  .ficha{border:2px solid var(--linea); border-radius:20px; background:#fff; padding:12px 8px;
+         text-align:center; cursor:pointer; user-select:none; display:flex; flex-direction:column;
+         align-items:center; gap:6px; transition:transform .08s ease, border-color .08s ease;}
+  .ficha:active{transform:scale(.95); border-color:var(--acento);}
+  .ficha .icono{width:84px; height:84px; display:flex; align-items:center; justify-content:center;}
+  .ficha .icono img{width:84px; height:84px; object-fit:contain;}
+  .ficha .icono .emoji{font-size:64px; line-height:1;}
+  .ficha .palabra{font-size:18px; font-weight:600;}
+  .emocion{background:var(--emocion);} .necesidad{background:var(--necesidad);}
+  .accion{background:var(--accion);} .gente{background:var(--gente);}
+  .comida{background:var(--comida);} .verbo{background:var(--verbo);}
+  .lugar{background:var(--lugar);} .cuerpo{background:var(--cuerpo);} .juego{background:var(--juego);}
+
+  /* Barra de modos: Comunicar / Ejercicios */
+  #modos{display:flex; gap:10px; padding:10px 16px; background:var(--barra); border-bottom:1px solid var(--linea);}
+  .modo{flex:1; border:2px solid var(--linea); background:#fff; border-radius:14px; padding:12px;
+        font-size:18px; font-weight:700; cursor:pointer; color:var(--suave);}
+  .modo.activo{background:var(--acento2); border-color:var(--acento2); color:#fff;}
+  /* Ejercicios */
+  .ejmenu{max-width:560px; margin:0 auto;}
+  .ejmenu h2,.ejpregunta{text-align:center; color:var(--texto);}
+  .ejcard{display:flex; flex-direction:column; align-items:center; gap:6px; width:100%;
+          margin-bottom:14px; padding:20px; font-size:40px; border:2px solid var(--linea);
+          background:#fff; border-radius:18px; cursor:pointer;}
+  .ejcard b{font-size:20px;} .ejcard i{font-size:14px; color:var(--suave); font-style:normal; font-weight:500;}
+  .ejtop{display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;}
+  .ejvolver{border:0; background:transparent; color:var(--acento2); font-size:16px; font-weight:700; cursor:pointer;}
+  .ejpunt{font-size:20px; font-weight:700;}
+  .ejpregunta{font-size:26px; margin:10px 0 18px;}
+  .ejopciones{display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); max-width:620px; margin:0 auto;}
+  .ejopciones .ficha{cursor:pointer;}
+  .ejpalabra{border:2px solid var(--linea); background:#fff; border-radius:16px; padding:18px; font-size:20px; font-weight:600; cursor:pointer;}
+  .ejcara{display:flex; justify-content:center; margin-bottom:18px;}
+  .ejcara .icono{width:150px; height:150px;}
+  .ejcara .icono img{width:150px; height:150px; object-fit:contain;}
+  .ejcara .icono .emoji{font-size:120px; line-height:1;}
+  .ejfeedback{text-align:center; font-size:22px; font-weight:700; color:#3aa66e; margin-top:18px; min-height:28px;}
+  /* Parejas (memoria) */
+  .parejas{display:grid; gap:14px; max-width:620px; margin:0 auto; grid-template-columns:repeat(auto-fit,minmax(110px,1fr));}
+  .carta{aspect-ratio:1; border:2px solid var(--linea); border-radius:18px; background:var(--acento);
+         display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:46px; color:#fff;}
+  .carta.vuelta{background:#fff;}
+  .carta.hecha{opacity:.4; cursor:default;}
+  .carta .icono{width:78px; height:78px; display:flex; align-items:center; justify-content:center;}
+  .carta .icono img{width:78px; height:78px; object-fit:contain;}
+  .carta .icono .emoji{font-size:46px; line-height:1;}
+  /* ¿Qué dirías tú? */
+  .escena{text-align:center; max-width:560px; margin:0 auto;}
+  .escena .emoji{font-size:90px; line-height:1;}
+  .escena .txt{font-size:24px; margin:10px 0 20px;}
+  .opcsocial{display:flex; flex-direction:column; gap:12px; max-width:480px; margin:0 auto;}
+  .opcsocial button{border:2px solid var(--linea); background:#fff; border-radius:16px; padding:16px; font-size:19px; cursor:pointer;}
+  /* Causa-efecto */
+  .causa{display:flex; justify-content:center; padding:20px 0;}
+  .globo{font-size:130px; line-height:1; border:0; background:transparent; cursor:pointer;}
+  /* Contar */
+  .contar{display:flex; flex-wrap:wrap; gap:12px; justify-content:center; margin-bottom:20px;}
+  .contar .cuenta{width:70px; height:70px; display:flex; align-items:center; justify-content:center;}
+  .contar .cuenta img{width:70px; height:70px; object-fit:contain;}
+  .contar .cuenta .emoji{font-size:54px; line-height:1;}
+  .numeros{max-width:380px;} .numeros .ejpalabra{font-size:26px; font-weight:700;}
+  /* Ordenar rutina */
+  .rutina{display:flex; flex-wrap:wrap; gap:12px; justify-content:center; max-width:660px; margin:0 auto;}
+  .pasoR{width:132px; border:2px solid var(--linea); border-radius:16px; background:#fff; padding:12px;
+         text-align:center; cursor:pointer; position:relative;}
+  .pasoR .emoji{font-size:50px; line-height:1; display:block; margin-bottom:6px;}
+  .pasoR .pt{font-size:15px;}
+  .pasoR.ok{background:var(--necesidad); opacity:.75;}
+  .pasoR .num{position:absolute; top:6px; right:10px; font-weight:700; color:var(--acento2); font-size:18px;}
+
+  footer{background:var(--barra); border-top:1px solid var(--linea); padding:9px 16px;
+         text-align:center; color:var(--suave); font-size:13px;}
+
+  .adulto{border:2px solid var(--linea); background:#fff; border-radius:12px;
+          padding:8px 12px; font-size:15px; font-weight:600; cursor:pointer; color:var(--suave);}
+  /* Panel para adultos */
+  #modal{display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+         align-items:center; justify-content:center; padding:16px; z-index:10;}
+  #modal .caja{background:#fff; border-radius:18px; padding:22px; width:min(520px,96vw);
+               max-height:90vh; overflow:auto;}
+  #modal h3{margin:0 0 16px;} #modal h4{margin:20px 0 8px; color:var(--suave);}
+  #modal label{display:block; margin-bottom:12px; font-weight:600;}
+  #modal input[type=text],#modal select{display:block; width:100%; margin-top:6px;
+      padding:11px; border:1px solid var(--linea); border-radius:10px; font-size:16px;}
+  #modal input[type=file]{display:block; margin-top:6px; font-size:15px;}
+  .previa{max-width:120px; max-height:120px; display:none; margin-bottom:12px; border-radius:10px;}
+  .previa[src]{display:block;}
+  .mbotones{display:flex; gap:10px;}
+  .mbotones button{flex:1; border:0; border-radius:12px; padding:13px; font-size:16px;
+                   font-weight:600; cursor:pointer;}
+  .bok{background:#3aa66e; color:#fff;} .bcancel{background:#b0bcc4; color:#fff;}
+  .mfila{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--linea);}
+  .mfila img{width:42px; height:42px; object-fit:cover; border-radius:8px;}
+  .mfila .em{font-size:30px; width:42px; text-align:center;}
+  .mfila b{flex:0 0 auto;} .mfila i{color:var(--suave); margin-left:auto; font-style:normal; font-size:13px; margin-right:10px;}
+  .mdel{border:0; background:#e08a8a; color:#fff; border-radius:8px; padding:6px 10px; cursor:pointer;}
+</style>
+</head>
+<body>
+  <header>
+    <div class="logo">Travis <small>· comunicación</small></div>
+    <button id="bAdulto" class="adulto" title="Para adultos">✏️ Adulto</button>
+    <div class="niveles">
+      <span>Nivel:</span>
+      <button class="niv" data-niv="3">1</button>
+      <button class="niv" data-niv="2">2</button>
+      <button class="niv" data-niv="1">3</button>
+    </div>
+  </header>
+
+  <div id="modos">
+    <button id="modoComunicar" class="modo activo">💬 Comunicar</button>
+    <button id="modoEjercicios" class="modo">🎯 Ejercicios</button>
+  </div>
+
+  <div id="tira">
+    <div id="frase"></div>
+    <button class="btnfrase quitar"     id="bQuitar" title="Quitar el último">⌫</button>
+    <button class="btnfrase borrar"     id="bBorrar" title="Borrar todo">✕</button>
+    <button class="btnfrase reproducir" id="bDecir"  title="Decir la frase">▶</button>
+  </div>
+
+  <main id="contenido">
+    <div id="tablero"></div>
+    <div id="vistaEjercicios" style="display:none"></div>
+  </main>
+  <footer>Pictogramas de ARASAAC · Acompaña, no sustituye · Uso con un adulto cerca.</footer>
+
+  <div id="modal">
+    <div class="caja">
+      <h3>Para adultos · añadir tarjeta</h3>
+      <label>Palabra <input id="mPalabra" type="text" placeholder="p. ej. mi cama" /></label>
+      <label>Categoría <select id="mGrupo"></select></label>
+      <label>Foto (opcional) <input id="mFoto" type="file" accept="image/*" capture="environment" /></label>
+      <img id="mPrevia" class="previa" alt="" />
+      <div class="mbotones">
+        <button id="mAnadir" class="bok">Añadir tarjeta</button>
+        <button id="mCerrar" class="bcancel">Cerrar</button>
+      </div>
+      <h4>Tarjetas que has añadido</h4>
+      <div id="mLista"></div>
+    </div>
+  </div>
+
+<script>
+// ===========================================================================
+// Vocabulario. Cada ficha: icono (emoji de reserva), palabra, frase para hablar,
+// 'buscar' (palabra para traer el pictograma real de ARASAAC) y 'min' (nivel
+// minimo en que aparece: 1=siempre/los mas basicos ... 3=solo nivel avanzado).
+// Niveles en pantalla: boton "1" = mas simple (menos fichas), "3" = todas.
+// ===========================================================================
+const VOCAB = [
+  { titulo:"Quiero / Necesito", clase:"necesidad", fichas:[
+    { e:"💧", p:"Agua",      f:"agua",      b:"agua",        min:1 },
+    { e:"🍎", p:"Comer",     f:"comer",     b:"comer",       min:1 },
+    { e:"🚽", p:"Baño",      f:"baño",      b:"water",       min:1 },
+    { e:"🤗", p:"Abrazo",    f:"un abrazo", b:"abrazo",      min:1 },
+    { e:"🧸", p:"Jugar",     f:"jugar",     b:"jugar",       min:2 },
+    { e:"🛏️", p:"Descansar", f:"descansar", b:"dormir",      min:2 },
+    { e:"🎵", p:"Música",    f:"música",    b:"musica",      min:3 },
+    { e:"🙋", p:"Ayuda",     f:"ayuda",     b:"ayuda",       min:1 },
+  ]},
+  { titulo:"¿Cómo me siento?", clase:"emocion", fichas:[
+    { e:"😊", p:"Feliz",     f:"feliz",     b:"feliz",       min:1 },
+    { e:"😢", p:"Triste",    f:"triste",    b:"triste",      min:1 },
+    { e:"😠", p:"Enfadado",  f:"enfadado",  b:"enfadado",    min:2 },
+    { e:"😨", p:"Asustado",  f:"asustado",  b:"miedo",       min:2 },
+    { e:"😴", p:"Cansado",   f:"cansado",   b:"cansado",     min:3 },
+    { e:"😌", p:"Tranquilo", f:"tranquilo", b:"tranquilo",   min:3 },
+  ]},
+  { titulo:"Palabras", clase:"accion", fichas:[
+    { e:"🙂", p:"Sí",        f:"sí",        b:"si",          min:1 },
+    { e:"🚫", p:"No",        f:"no",        b:"no",          min:1 },
+    { e:"👉", p:"Yo",        f:"yo",        b:"yo",          min:2 },
+    { e:"❤️", p:"Quiero",    f:"quiero",    b:"querer",      min:2 },
+    { e:"👍", p:"Más",       f:"más",       b:"mas",         min:2 },
+    { e:"✋", p:"Para",      f:"para",      b:"parar",       min:2 },
+    { e:"🙏", p:"Por favor", f:"por favor", b:"por favor",   min:3 },
+    { e:"😀", p:"Me gusta",  f:"me gusta",  b:"gustar",      min:3 },
+  ]},
+  { titulo:"Personas", clase:"gente", fichas:[
+    { e:"👩", p:"Mamá",      f:"mamá",      b:"mama",        min:2 },
+    { e:"👨", p:"Papá",      f:"papá",      b:"papa",        min:2 },
+    { e:"🧑‍🏫", p:"Profe",   f:"el profe",  b:"profesor",    min:3 },
+    { e:"👋", p:"Hola",      f:"hola",      b:"hola",        min:1 },
+    { e:"👋", p:"Adiós",     f:"adiós",     b:"adios",       min:1 },
+  ]},
+  { titulo:"Comida y bebida", clase:"comida", fichas:[
+    { e:"🥛", p:"Leche",   f:"leche",   b:"leche",   min:1 },
+    { e:"🍞", p:"Pan",     f:"pan",     b:"pan",     min:2 },
+    { e:"🍓", p:"Fruta",   f:"fruta",   b:"fruta",   min:2 },
+    { e:"🍪", p:"Galleta", f:"galleta", b:"galleta", min:2 },
+    { e:"🧃", p:"Zumo",    f:"zumo",    b:"zumo",    min:3 },
+    { e:"🥣", p:"Yogur",   f:"yogur",   b:"yogur",   min:3 },
+  ]},
+  { titulo:"Acciones", clase:"verbo", fichas:[
+    { e:"🥤", p:"Beber",       f:"beber",           b:"beber",       min:2 },
+    { e:"🚶", p:"Ir",          f:"ir",              b:"ir",          min:2 },
+    { e:"👀", p:"Ver",         f:"ver",             b:"ver",         min:3 },
+    { e:"🚪", p:"Abrir",       f:"abrir",           b:"abrir",       min:3 },
+    { e:"🧼", p:"Lavar manos", f:"lavar las manos", b:"lavar manos", min:3 },
+  ]},
+  { titulo:"Lugares", clase:"lugar", fichas:[
+    { e:"🏠", p:"Casa",    f:"casa",      b:"casa",    min:1 },
+    { e:"🏫", p:"Cole",    f:"el cole",   b:"colegio", min:2 },
+    { e:"🛝", p:"Parque",  f:"el parque", b:"parque",  min:2 },
+    { e:"🚗", p:"Coche",   f:"el coche",  b:"coche",   min:2 },
+    { e:"🩺", p:"Médico",  f:"el médico", b:"medico",  min:3 },
+  ]},
+  { titulo:"Me duele", clase:"cuerpo", fichas:[
+    { e:"🤕", p:"Me duele", f:"me duele",   b:"dolor",   min:1 },
+    { e:"🙂", p:"Cabeza",   f:"la cabeza",  b:"cabeza",  min:2 },
+    { e:"🫃", p:"Barriga",  f:"la barriga", b:"barriga", min:2 },
+    { e:"✋", p:"Mano",     f:"la mano",    b:"mano",    min:3 },
+    { e:"🦶", p:"Pie",      f:"el pie",     b:"pie",     min:3 },
+  ]},
+  { titulo:"Juego y ocio", clase:"juego", fichas:[
+    { e:"⚽", p:"Pelota",  f:"la pelota", b:"pelota",     min:2 },
+    { e:"📺", p:"Tele",    f:"la tele",   b:"television", min:2 },
+    { e:"📱", p:"Tablet",  f:"la tablet", b:"tablet",     min:2 },
+    { e:"📖", p:"Libro",   f:"un libro",  b:"libro",      min:3 },
+    { e:"🖍️", p:"Pintar",  f:"pintar",    b:"pintar",     min:3 },
+  ]},
+];
+
+// --- Voz del dispositivo (no necesita internet) ---------------------------
+let vozES = null;
+function elegirVoz(){
+  const v = window.speechSynthesis.getVoices();
+  vozES = v.find(x => /es[-_]/i.test(x.lang)) || v.find(x => /spanish|español/i.test(x.name)) || null;
+}
+elegirVoz();
+window.speechSynthesis.onvoiceschanged = elegirVoz;
+function hablar(texto){
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(texto);
+  u.lang = "es-ES"; if (vozES) u.voice = vozES; u.rate = 0.9;
+  window.speechSynthesis.speak(u);
+}
+
+// --- Pictogramas reales de ARASAAC (con emoji de reserva si no hay red) -----
+async function ponerPictograma(elIcono, ficha){
+  try{
+    const r = await fetch("https://api.arasaac.org/api/pictograms/es/search/" + encodeURIComponent(ficha.b));
+    if(!r.ok) return;
+    const data = await r.json();
+    if(Array.isArray(data) && data.length){
+      const id = data[0]._id;
+      const img = new Image();
+      img.alt = ficha.p;
+      img.onload = () => { elIcono.innerHTML = ""; elIcono.appendChild(img); };
+      img.src = "https://static.arasaac.org/pictograms/" + id + "/" + id + "_300.png";
+    }
+  }catch(e){ /* sin red: se queda el emoji */ }
+}
+
+// --- Tira de frase ---------------------------------------------------------
+const frase = [];           // [{p, f, html}]
+const elFrase = document.getElementById("frase");
+function pintarFrase(){
+  elFrase.innerHTML = "";
+  for(const t of frase){
+    const tk = document.createElement("div");
+    tk.className = "token";
+    tk.innerHTML = t.iconoHTML + "<span>" + t.p + "</span>";
+    elFrase.appendChild(tk);
+  }
+}
+function anadir(ficha, iconoHTML){
+  frase.push({ p: ficha.p, f: ficha.f, iconoHTML });
+  pintarFrase();
+  hablar(ficha.f);                 // dice la palabra al tocarla (util si no habla)
+}
+document.getElementById("bDecir").onclick  = () => { if(frase.length) hablar(frase.map(t=>t.f).join(" ")); };
+document.getElementById("bBorrar").onclick = () => { frase.length=0; pintarFrase(); };
+document.getElementById("bQuitar").onclick = () => { frase.pop(); pintarFrase(); };
+
+// --- Tarjetas personalizadas (las anade un adulto; se guardan en el navegador) ---
+const CLAVE = "travis_custom_v1";
+function cargarCustom(){ try{ return JSON.parse(localStorage.getItem(CLAVE)) || []; }catch(e){ return []; } }
+function guardarCustom(arr){ localStorage.setItem(CLAVE, JSON.stringify(arr)); }
+
+// --- Construir el tablero segun el nivel -----------------------------------
+const tablero = document.getElementById("tablero");
+let nivelActual = 2;
+
+function fichaDOM(f, grupoClase){
+  const div = document.createElement("div"); div.className = "ficha " + grupoClase;
+  const icono = document.createElement("div"); icono.className="icono";
+  if(f.foto){ const img=new Image(); img.src=f.foto; img.alt=f.p; icono.appendChild(img); }
+  else { icono.innerHTML = '<span class="emoji">' + f.e + '</span>'; }
+  const palabra = document.createElement("div"); palabra.className="palabra"; palabra.textContent=f.p;
+  div.appendChild(icono); div.appendChild(palabra);
+  div.addEventListener("click", () => anadir(f, icono.innerHTML));
+  if(!f.foto) ponerPictograma(icono, f);   // pictograma real solo si no hay foto propia
+  return div;
+}
+
+function construir(nivelMin){
+  // nivelMin: 1 muestra solo lo mas basico; 3 muestra todo. Las tarjetas del
+  // adulto (custom) salen siempre, en su categoria.
+  nivelActual = nivelMin;
+  tablero.innerHTML = "";
+  const custom = cargarCustom();
+  for(const grupo of VOCAB){
+    const base = grupo.fichas.filter(f => f.min <= nivelMin);
+    const extra = custom.filter(c => c.grupo === grupo.titulo);
+    const fichas = base.concat(extra);
+    if(!fichas.length) continue;
+    const sec = document.createElement("section"); sec.className="grupo";
+    sec.innerHTML = "<h2>" + grupo.titulo + "</h2>";
+    const rej = document.createElement("div"); rej.className="rejilla";
+    for(const f of fichas){ rej.appendChild(fichaDOM(f, grupo.clase)); }
+    sec.appendChild(rej); tablero.appendChild(sec);
+  }
+}
+
+// Selector de nivel. Boton "1"=todo (verbal), "2"=medio, "3"=minimo (mas apoyo).
+const mapa = { "3":3, "2":2, "1":1 }; // data-niv -> cuanto vocabulario mostrar
+document.querySelectorAll(".niv").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".niv").forEach(x=>x.classList.remove("activo"));
+    b.classList.add("activo");
+    construir(mapa[b.dataset.niv]);
+    // Si estamos en Ejercicios, refresca los juegos del nuevo nivel.
+    if(typeof vistaEj !== "undefined" && vistaEj && vistaEj.style.display !== "none") menuEjercicios();
+  });
+});
+
+// --- Panel para adultos: anadir/quitar tarjetas con foto + palabra ---------
+const modal = document.getElementById("modal");
+document.getElementById("bAdulto").onclick = () => { modal.style.display="flex"; pintarLista(); };
+document.getElementById("mCerrar").onclick = () => { modal.style.display="none"; };
+
+let fotoData = "";
+document.getElementById("mFoto").addEventListener("change", (ev) => {
+  const file = ev.target.files[0]; if(!file) return;
+  const fr = new FileReader();
+  fr.onload = () => { fotoData = fr.result; document.getElementById("mPrevia").src = fotoData; };
+  fr.readAsDataURL(file);
+});
+
+document.getElementById("mAnadir").onclick = () => {
+  const p = document.getElementById("mPalabra").value.trim();
+  if(!p){ alert("Escribe una palabra para la tarjeta."); return; }
+  const grupo = document.getElementById("mGrupo").value;
+  const arr = cargarCustom();
+  arr.push({ grupo, p, f:p, e:"⭐", b:p, min:1, foto:fotoData });
+  guardarCustom(arr);
+  document.getElementById("mPalabra").value=""; fotoData="";
+  document.getElementById("mPrevia").removeAttribute("src");
+  document.getElementById("mFoto").value="";
+  pintarLista(); construir(nivelActual);
+};
+
+function pintarLista(){
+  const cont = document.getElementById("mLista"); cont.innerHTML="";
+  const arr = cargarCustom();
+  if(!arr.length){ cont.innerHTML = '<p style="color:#6b7a85">Aún no has añadido tarjetas.</p>'; return; }
+  arr.forEach((c, i) => {
+    const fila = document.createElement("div"); fila.className="mfila";
+    fila.innerHTML = (c.foto ? '<img src="'+c.foto+'">' : '<span class="em">⭐</span>')
+                   + "<b>"+c.p+"</b><i>"+c.grupo+"</i>";
+    const del = document.createElement("button"); del.textContent="Borrar"; del.className="mdel";
+    del.onclick = () => { const a=cargarCustom(); a.splice(i,1); guardarCustom(a); pintarLista(); construir(nivelActual); };
+    fila.appendChild(del); cont.appendChild(fila);
+  });
+}
+
+// --- Arranque --------------------------------------------------------------
+const selGrupo = document.getElementById("mGrupo");
+VOCAB.forEach(g => { const o=document.createElement("option"); o.value=g.titulo; o.textContent=g.titulo; selGrupo.appendChild(o); });
+document.querySelector('.niv[data-niv="2"]').classList.add("activo");
+construir(2);
+
+// ===========================================================================
+//  EJERCICIOS: juegos de aprendizaje, calmados, SIN castigo (refuerzo positivo).
+//  Se adaptan al nivel: menos opciones en nivel con mas apoyo, mas en verbal.
+// ===========================================================================
+const vistaEj = document.getElementById("vistaEjercicios");
+const elTablero = document.getElementById("tablero");
+const elTira = document.getElementById("tira");
+let aciertos = 0;
+const barajar = a => a.slice().sort(() => Math.random() - 0.5);
+
+function setModo(m){
+  const com = (m === "comunicar");
+  elTira.style.display = com ? "flex" : "none";
+  elTablero.style.display = com ? "block" : "none";
+  vistaEj.style.display = com ? "none" : "block";
+  document.getElementById("modoComunicar").classList.toggle("activo", com);
+  document.getElementById("modoEjercicios").classList.toggle("activo", !com);
+  if(!com) menuEjercicios();
+}
+document.getElementById("modoComunicar").onclick = () => setModo("comunicar");
+document.getElementById("modoEjercicios").onclick = () => setModo("ejercicios");
+
+// Catalogo de ejercicios. 'niveles' usa el valor interno nivelActual:
+//   3 = Nivel 1 (verbal) · 2 = Nivel 2 · 1 = Nivel 3 (mas apoyo).
+// Cada grado solo vera los juegos cuyo 'niveles' incluye su valor.
+const EJERCICIOS = [
+  { id:"ejc", icono:"🎈", titulo:"Toca y celebra",       desc:"Causa y efecto",       niveles:[1],     fn:() => ejCausa() },
+  { id:"ej1", icono:"🔎", titulo:"Encuentra el dibujo",  desc:"Vocabulario",          niveles:[1,2],   fn:() => ejEncuentra() },
+  { id:"ej3", icono:"🧩", titulo:"Encuentra las parejas", desc:"Memoria",             niveles:[1,2,3], fn:() => ejParejas() },
+  { id:"ejn", icono:"🔢", titulo:"Contar",               desc:"Números",              niveles:[2,3],   fn:() => ejContar() },
+  { id:"ejl", icono:"🧺", titulo:"Clasificar",           desc:"Categorías",           niveles:[2,3],   fn:() => ejClasificar() },
+  { id:"ejr", icono:"🪜", titulo:"Ordenar la rutina",    desc:"Secuencias",           niveles:[1,2,3], fn:() => ejRutina() },
+  { id:"ej2", icono:"😊", titulo:"¿Cómo se siente?",     desc:"Emociones",            niveles:[2,3],   fn:() => ejEmocion() },
+  { id:"ej4", icono:"🗣️", titulo:"¿Qué dirías tú?",      desc:"Habilidades sociales", niveles:[3],     fn:() => ejSocial() },
+];
+function gradoMostrado(){ return ({3:1, 2:2, 1:3})[nivelActual]; }
+
+function menuEjercicios(){
+  const lista = EJERCICIOS.filter(e => e.niveles.includes(nivelActual));
+  let html = '<div class="ejmenu"><h2>Juegos para el Nivel ' + gradoMostrado() + '</h2>';
+  if(!lista.length){
+    html += '<p style="text-align:center; color:var(--suave)">Aún no hay juegos para este nivel.</p>';
+  }
+  for(const e of lista){
+    html += '<button class="ejcard" data-id="' + e.id + '">' + e.icono
+          + '<b>' + e.titulo + '</b><i>' + e.desc + '</i></button>';
+  }
+  html += '</div>';
+  vistaEj.innerHTML = html;
+  for(const e of lista){
+    vistaEj.querySelector('[data-id="' + e.id + '"]').onclick = e.fn;
+  }
+}
+
+function poolNivel(){
+  const arr = [];
+  for(const g of VOCAB){ for(const f of g.fichas){ if(f.min <= nivelActual) arr.push(f); } }
+  for(const c of cargarCustom()){ arr.push(c); }
+  return arr;
+}
+const cabeceraEj = () =>
+  '<div class="ejtop"><button class="ejvolver">⟵ Ejercicios</button><div class="ejpunt">⭐ ' + aciertos + '</div></div>';
+
+function ejEncuentra(){
+  const pool = poolNivel().filter(f => f.p);
+  if(pool.length < 2){ vistaEj.innerHTML = cabeceraEj() + "<p style='text-align:center'>Sube el nivel para tener más dibujos.</p>"; vistaEj.querySelector(".ejvolver").onclick = menuEjercicios; return; }
+  const nOpc = Math.max(2, Math.min(nivelActual + 1, pool.length));
+  const objetivo = pool[Math.floor(Math.random() * pool.length)];
+  const otros = barajar(pool.filter(f => f.p !== objetivo.p)).slice(0, nOpc - 1);
+  const opciones = barajar([objetivo, ...otros]);
+  vistaEj.innerHTML = cabeceraEj()
+    + '<h2 class="ejpregunta">Toca: <b>' + objetivo.p + '</b></h2>'
+    + '<div class="ejopciones"></div><div class="ejfeedback">&nbsp;</div>';
+  hablar("Toca " + objetivo.f);
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  const cont = vistaEj.querySelector(".ejopciones");
+  const fb = vistaEj.querySelector(".ejfeedback");
+  for(const op of opciones){
+    const div = document.createElement("div"); div.className = "ficha";
+    const ic = document.createElement("div"); ic.className = "icono";
+    if(op.foto){ const im = new Image(); im.src = op.foto; ic.appendChild(im); }
+    else ic.innerHTML = '<span class="emoji">' + op.e + '</span>';
+    div.appendChild(ic);
+    div.onclick = () => {
+      if(op.p === objetivo.p){ aciertos++; fb.textContent = "¡Muy bien! 🎉"; hablar("¡Muy bien!"); setTimeout(ejEncuentra, 1300); }
+      else { fb.textContent = "Casi… prueba otra vez"; hablar("Casi. Prueba otra vez."); div.style.opacity = .35; }
+    };
+    cont.appendChild(div);
+    if(!op.foto) ponerPictograma(ic, op);
+  }
+}
+
+function ejEmocion(){
+  const grupo = VOCAB.find(g => g.titulo === "¿Cómo me siento?");
+  const emos = grupo.fichas.filter(f => f.min <= nivelActual);
+  if(emos.length < 2){ vistaEj.innerHTML = cabeceraEj() + "<p style='text-align:center'>Sube el nivel para tener más emociones.</p>"; vistaEj.querySelector(".ejvolver").onclick = menuEjercicios; return; }
+  const nOpc = Math.max(2, Math.min(nivelActual + 1, emos.length));
+  const objetivo = emos[Math.floor(Math.random() * emos.length)];
+  const otros = barajar(emos.filter(f => f.p !== objetivo.p)).slice(0, nOpc - 1);
+  const opciones = barajar([objetivo, ...otros]);
+  vistaEj.innerHTML = cabeceraEj()
+    + '<h2 class="ejpregunta">¿Cómo se siente?</h2>'
+    + '<div class="ejcara"><div class="icono" id="ejCara"><span class="emoji">' + objetivo.e + '</span></div></div>'
+    + '<div class="ejopciones"></div><div class="ejfeedback">&nbsp;</div>';
+  hablar("¿Cómo se siente?");
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  ponerPictograma(document.getElementById("ejCara"), objetivo);
+  const cont = vistaEj.querySelector(".ejopciones");
+  const fb = vistaEj.querySelector(".ejfeedback");
+  for(const op of opciones){
+    const b = document.createElement("button"); b.className = "ejpalabra"; b.textContent = op.p;
+    b.onclick = () => {
+      if(op.p === objetivo.p){ aciertos++; fb.textContent = "¡Muy bien! 🎉"; hablar("Está " + objetivo.f + ". ¡Muy bien!"); setTimeout(ejEmocion, 1500); }
+      else { fb.textContent = "Casi… prueba otra vez"; hablar("Casi."); b.style.opacity = .35; }
+    };
+    cont.appendChild(b);
+  }
+}
+
+// --- Ejercicio: Encuentra las parejas (memoria, TEACCH) ---------------------
+function pintarCarta(div, f){
+  div.classList.add("vuelta"); div.textContent = "";
+  const ic = document.createElement("div"); ic.className = "icono";
+  if(f.foto){ const im = new Image(); im.src = f.foto; ic.appendChild(im); }
+  else ic.innerHTML = '<span class="emoji">' + f.e + '</span>';
+  div.appendChild(ic);
+  if(!f.foto) ponerPictograma(ic, f);
+}
+function taparCarta(div){ div.classList.remove("vuelta"); div.innerHTML = ""; div.textContent = "?"; }
+function ejParejas(){
+  const pool = poolNivel().filter(f => f.p);
+  if(pool.length < 2){ vistaEj.innerHTML = cabeceraEj() + "<p style='text-align:center'>Sube el nivel.</p>"; vistaEj.querySelector(".ejvolver").onclick = menuEjercicios; return; }
+  const nPares = Math.max(2, Math.min(nivelActual + 2, 6, pool.length));
+  const elegidos = barajar(pool).slice(0, nPares);
+  const cartas = barajar(elegidos.concat(elegidos));
+  vistaEj.innerHTML = cabeceraEj() + '<h2 class="ejpregunta">Encuentra las parejas</h2><div class="parejas"></div><div class="ejfeedback">&nbsp;</div>';
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  const cont = vistaEj.querySelector(".parejas");
+  const fb = vistaEj.querySelector(".ejfeedback");
+  let primera = null, bloqueo = false, hechas = 0;
+  for(const f of cartas){
+    const div = document.createElement("div"); div.className = "carta"; div.textContent = "?";
+    div.onclick = () => {
+      if(bloqueo || div.classList.contains("vuelta") || div.classList.contains("hecha")) return;
+      pintarCarta(div, f);
+      if(!primera){ primera = { div, f }; return; }
+      if(primera.f.p === f.p && primera.div !== div){
+        primera.div.classList.add("hecha"); div.classList.add("hecha");
+        hablar(f.f); hechas++; primera = null;
+        if(hechas === nPares){ aciertos++; fb.textContent = "¡Muy bien! 🎉"; hablar("¡Muy bien!"); setTimeout(ejParejas, 1600); }
+      } else {
+        bloqueo = true;
+        const a = primera.div;
+        setTimeout(() => { taparCarta(a); taparCarta(div); primera = null; bloqueo = false; }, 900);
+      }
+    };
+    cont.appendChild(div);
+  }
+}
+
+// --- Ejercicio: ¿Qué dirías tú? (cognicion social, nivel 1) -----------------
+const ESCENARIOS = [
+  { e:"😢", s:"Un niño se ha caído y llora.",        opc:[ {t:"¿Estás bien?", ok:true}, {t:"Me da igual.", ok:false}, {t:"Eres tonto.", ok:false} ] },
+  { e:"🧸", s:"Quieres jugar con un amigo.",          opc:[ {t:"¿Juegas conmigo?", ok:true}, {t:"Dame eso.", ok:false} ] },
+  { e:"🎁", s:"Alguien te da un regalo.",             opc:[ {t:"Gracias.", ok:true}, {t:"No lo quiero.", ok:false} ] },
+  { e:"🫂", s:"Tu amigo está triste.",                opc:[ {t:"¿Te doy un abrazo?", ok:true}, {t:"Adiós.", ok:false} ] },
+  { e:"🚪", s:"Alguien está en la puerta y quieres pasar.", opc:[ {t:"Perdona, ¿puedo pasar?", ok:true}, {t:"¡Quítate!", ok:false} ] },
+  { e:"🍽️", s:"Has terminado de comer en casa de un amigo.", opc:[ {t:"Gracias, estaba rico.", ok:true}, {t:"No me ha gustado.", ok:false} ] },
+];
+function ejSocial(){
+  const esc = ESCENARIOS[Math.floor(Math.random() * ESCENARIOS.length)];
+  const opc = barajar(esc.opc);
+  vistaEj.innerHTML = cabeceraEj()
+    + '<div class="escena"><div class="emoji">' + esc.e + '</div><div class="txt">' + esc.s + '</div></div>'
+    + '<div class="opcsocial"></div><div class="ejfeedback">&nbsp;</div>';
+  hablar(esc.s + " ¿Qué dirías tú?");
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  const cont = vistaEj.querySelector(".opcsocial");
+  const fb = vistaEj.querySelector(".ejfeedback");
+  for(const o of opc){
+    const b = document.createElement("button"); b.textContent = o.t;
+    b.onclick = () => {
+      if(o.ok){ aciertos++; fb.textContent = "¡Muy bien! 🎉"; hablar(o.t + ". ¡Muy bien!"); setTimeout(ejSocial, 2000); }
+      else { fb.textContent = "Mmm… piensa cómo se siente"; hablar("Mmm. Piensa cómo se siente."); b.style.opacity = .35; }
+    };
+    cont.appendChild(b);
+  }
+}
+
+// --- Ejercicio: Toca y celebra (causa-efecto, Nivel 3) ---------------------
+const PREMIOS = ["🎈","⭐","🌟","🔔","🐤","🌈","🎵","🐶","🐢","🦋"];
+function ejCausa(){
+  const cual = PREMIOS[Math.floor(Math.random() * PREMIOS.length)];
+  vistaEj.innerHTML = cabeceraEj()
+    + '<h2 class="ejpregunta">Toca el dibujo</h2>'
+    + '<div class="causa"><button class="globo">' + cual + '</button></div>'
+    + '<div class="ejfeedback">&nbsp;</div>';
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  const fb = vistaEj.querySelector(".ejfeedback");
+  const g = vistaEj.querySelector(".globo");
+  g.onclick = () => { g.textContent = "🎉"; aciertos++; fb.textContent = "¡Bien! 🎉"; hablar("¡Muy bien!"); setTimeout(ejCausa, 1100); };
+}
+
+// --- Ejercicio: Contar (numeros, Niveles 1-2) ------------------------------
+function ejContar(){
+  const pool = poolNivel().filter(f => f.p);
+  if(!pool.length){ vistaEj.innerHTML = cabeceraEj() + "<p style='text-align:center'>Sube el nivel.</p>"; vistaEj.querySelector(".ejvolver").onclick = menuEjercicios; return; }
+  const item = pool[Math.floor(Math.random() * pool.length)];
+  const maxN = (nivelActual >= 3) ? 5 : (nivelActual === 2 ? 4 : 3);
+  const n = 1 + Math.floor(Math.random() * maxN);
+  const set = new Set([n]);
+  while(set.size < 3){ set.add(Math.max(1, n + (Math.floor(Math.random()*5) - 2))); }
+  const opciones = barajar([...set]);
+  let cuerpo = '<div class="contar">';
+  for(let i=0;i<n;i++){ cuerpo += '<div class="icono cuenta"><span class="emoji">' + item.e + '</span></div>'; }
+  cuerpo += '</div>';
+  vistaEj.innerHTML = cabeceraEj() + '<h2 class="ejpregunta">¿Cuántos hay?</h2>' + cuerpo
+    + '<div class="ejopciones numeros"></div><div class="ejfeedback">&nbsp;</div>';
+  hablar("¿Cuántos hay?");
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  vistaEj.querySelectorAll(".cuenta").forEach(ic => {
+    if(item.foto){ ic.innerHTML=""; const im=new Image(); im.src=item.foto; ic.appendChild(im); }
+    else ponerPictograma(ic, item);
+  });
+  const cont = vistaEj.querySelector(".ejopciones");
+  const fb = vistaEj.querySelector(".ejfeedback");
+  for(const o of opciones){
+    const b = document.createElement("button"); b.className = "ejpalabra"; b.textContent = o;
+    b.onclick = () => {
+      if(o === n){ aciertos++; fb.textContent = "¡Muy bien! 🎉"; hablar("Hay " + n + ". ¡Muy bien!"); setTimeout(ejContar, 1500); }
+      else { fb.textContent = "Casi… cuenta otra vez"; hablar("Casi. Cuenta otra vez."); b.style.opacity = .35; }
+    };
+    cont.appendChild(b);
+  }
+}
+
+// --- Ejercicio: Clasificar (categorias, Niveles 1-2) -----------------------
+function ejClasificar(){
+  const candidatas = VOCAB.filter(g =>
+    ["Comida y bebida","Juego y ocio","Personas","Lugares","¿Cómo me siento?","Quiero / Necesito"].includes(g.titulo)
+    && g.fichas.some(f => f.min <= nivelActual));
+  if(candidatas.length < 2){ vistaEj.innerHTML = cabeceraEj() + "<p style='text-align:center'>Sube el nivel.</p>"; vistaEj.querySelector(".ejvolver").onclick = menuEjercicios; return; }
+  const dos = barajar(candidatas).slice(0, 2);
+  const correcta = dos[Math.floor(Math.random() * 2)];
+  const item = barajar(correcta.fichas.filter(f => f.min <= nivelActual))[0];
+  vistaEj.innerHTML = cabeceraEj()
+    + '<h2 class="ejpregunta">¿De qué grupo es?</h2>'
+    + '<div class="ejcara"><div class="icono" id="clItem"><span class="emoji">' + item.e + '</span></div></div>'
+    + '<div class="opcsocial"></div><div class="ejfeedback">&nbsp;</div>';
+  hablar("¿De qué grupo es " + item.f + "?");
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  const elItem = document.getElementById("clItem");
+  if(item.foto){ elItem.innerHTML=""; const im=new Image(); im.src=item.foto; elItem.appendChild(im); }
+  else ponerPictograma(elItem, item);
+  const cont = vistaEj.querySelector(".opcsocial");
+  const fb = vistaEj.querySelector(".ejfeedback");
+  for(const g of barajar(dos)){
+    const b = document.createElement("button"); b.textContent = g.titulo;
+    b.onclick = () => {
+      if(g.titulo === correcta.titulo){ aciertos++; fb.textContent = "¡Muy bien! 🎉"; hablar("¡Muy bien!"); setTimeout(ejClasificar, 1500); }
+      else { fb.textContent = "Casi… inténtalo otra vez"; hablar("Casi."); b.style.opacity = .35; }
+    };
+    cont.appendChild(b);
+  }
+}
+
+// --- Ejercicio: Ordenar la rutina (secuencias, TEACCH) ---------------------
+const RUTINAS = [
+  { nombre:"Lavarse las manos", pasos:[ {e:"🚰",t:"Abrir el grifo"}, {e:"🧼",t:"Echar jabón"}, {e:"👏",t:"Frotar las manos"}, {e:"💦",t:"Aclarar"}, {e:"🧻",t:"Secar"} ] },
+  { nombre:"Antes de dormir",   pasos:[ {e:"🛁",t:"Baño"}, {e:"🪥",t:"Lavar los dientes"}, {e:"👕",t:"Pijama"}, {e:"📖",t:"Un cuento"}, {e:"🛌",t:"Dormir"} ] },
+  { nombre:"Vestirse",          pasos:[ {e:"🩲",t:"Ropa interior"}, {e:"👕",t:"Camiseta"}, {e:"👖",t:"Pantalón"}, {e:"🧦",t:"Calcetines"}, {e:"👟",t:"Zapatos"} ] },
+];
+function ejRutina(){
+  const r = RUTINAS[Math.floor(Math.random() * RUTINAS.length)];
+  const nPasos = (nivelActual >= 3) ? r.pasos.length : (nivelActual === 2 ? Math.min(4, r.pasos.length) : 3);
+  const pasos = r.pasos.slice(0, nPasos);
+  const mezcla = barajar(pasos.map((p, i) => ({ p, i })));
+  vistaEj.innerHTML = cabeceraEj()
+    + '<h2 class="ejpregunta">Ordena: ' + r.nombre + '</h2>'
+    + '<p style="text-align:center;color:var(--suave)">Toca los pasos en orden.</p>'
+    + '<div class="rutina"></div><div class="ejfeedback">&nbsp;</div>';
+  hablar("Ordena: " + r.nombre + ". ¿Qué va primero?");
+  vistaEj.querySelector(".ejvolver").onclick = menuEjercicios;
+  const cont = vistaEj.querySelector(".rutina");
+  const fb = vistaEj.querySelector(".ejfeedback");
+  let esperado = 0;
+  for(const m of mezcla){
+    const div = document.createElement("div"); div.className = "pasoR";
+    div.innerHTML = '<span class="emoji">' + m.p.e + '</span><span class="pt">' + m.p.t + '</span><span class="num"></span>';
+    div.onclick = () => {
+      if(div.classList.contains("ok")) return;
+      if(m.i === esperado){
+        esperado++; div.classList.add("ok"); div.querySelector(".num").textContent = esperado; hablar(m.p.t);
+        if(esperado === pasos.length){ aciertos++; fb.textContent = "¡Muy bien! 🎉"; hablar("¡Muy bien!"); setTimeout(ejRutina, 1800); }
+      } else { fb.textContent = "Ese no… ¿cuál va ahora?"; hablar("Ese no todavía."); }
+    };
+    cont.appendChild(div);
+  }
+}
+</script>
+</body>
+</html>

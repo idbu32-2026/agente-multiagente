@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secretos: cualquier variante de .env (la plantilla .env.example si se permite)
+.env
+.env.*
+!.env.example
+
+# Logs del servidor
+*.log

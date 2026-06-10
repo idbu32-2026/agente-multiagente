@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S.</title>
+<style>
+  :root { --cian:#00e5ff; --glow:0 0 12px var(--cian),0 0 24px rgba(0,229,255,.5); }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; background:#000; color:var(--cian);
+    font-family:"Consolas","Segoe UI",monospace; overflow:hidden; user-select:none; }
+  #lienzo { position:fixed; inset:0; z-index:0; display:block; }
+  .hud { position:fixed; inset:0; z-index:2; pointer-events:none; }
+  .esquina { position:absolute; width:46px; height:46px; border:2px solid var(--cian); opacity:.7; box-shadow:var(--glow); }
+  .tl{top:18px;left:18px;border-right:none;border-bottom:none}
+  .tr{top:18px;right:18px;border-left:none;border-bottom:none}
+  .bl{bottom:18px;left:18px;border-right:none;border-top:none}
+  .br{bottom:18px;right:18px;border-left:none;border-top:none}
+  .titulo { position:absolute; top:34px; width:100%; text-align:center; font-size:2.3rem;
+    letter-spacing:1.2rem; font-weight:700; text-shadow:var(--glow); padding-left:1.2rem; }
+  .subtitulo { position:absolute; top:82px; width:100%; text-align:center; font-size:.75rem; letter-spacing:.5rem; opacity:.7; }
+  .lado { position:absolute; top:50%; transform:translateY(-50%); font-size:.7rem; letter-spacing:.15rem; opacity:.5; line-height:1.9; white-space:pre; }
+  .izq{left:42px} .der{right:42px;text-align:right}
+  .estado { position:absolute; bottom:92px; width:100%; text-align:center; font-size:.9rem; letter-spacing:.35rem; }
+  .punto { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--cian); box-shadow:var(--glow); margin-right:10px; vertical-align:middle; animation:parp 1.4s infinite; }
+  @keyframes parp { 50%{opacity:.35} }
+  .selector { position:fixed; bottom:30px; width:100%; display:flex; gap:14px; justify-content:center; z-index:3; }
+  .selector button { pointer-events:auto; cursor:pointer; background:rgba(0,30,40,.6); color:var(--cian);
+    border:1px solid var(--cian); padding:8px 16px; font-family:inherit; letter-spacing:.15rem; font-size:.8rem;
+    border-radius:4px; box-shadow:0 0 8px rgba(0,229,255,.3); transition:.15s; }
+  .selector button:hover { background:rgba(0,80,100,.6); }
+  .selector button.sel { background:var(--cian); color:#001; font-weight:700; }
+  #err { position:fixed; bottom:70px; width:100%; text-align:center; font-size:.7rem; color:#ff6b6b; z-index:3; }
+</style>
+</head>
+<body>
+  <canvas id="lienzo"></canvas>
+  <div class="hud">
+    <div class="esquina tl"></div><div class="esquina tr"></div>
+    <div class="esquina bl"></div><div class="esquina br"></div>
+    <div class="titulo">J.A.R.V.I.S.</div>
+    <div class="subtitulo">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
+    <div class="lado izq" id="ladoIzq"></div>
+    <div class="lado der" id="ladoDer"></div>
+    <div class="estado"><span class="punto"></span><span id="estadoTexto">SISTEMAS EN LÍNEA</span></div>
+  </div>
+  <div class="selector" id="selector"></div>
+  <div id="err"></div>
+
+  <script src="lib/three.min.js"></script>
+  <script src="lib/EffectComposer.js"></script>
+  <script src="lib/CopyShader.js"></script>
+  <script src="lib/LuminosityHighPassShader.js"></script>
+  <script src="lib/MaskPass.js"></script>
+  <script src="lib/RenderPass.js"></script>
+  <script src="lib/ShaderPass.js"></script>
+  <script src="lib/UnrealBloomPass.js"></script>
+<script>
+try {
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 7);
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('lienzo'), antialias:true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+  scene.add(new THREE.AmbientLight(0x223344, 1.0));
+  const luz = new THREE.PointLight(0x00e5ff, 2.2, 60); luz.position.set(0,0,4); scene.add(luz);
+
+  // ===== Puntitos de fondo (los del principio) =====
+  const NP = 1200, pv = new Float32Array(NP*3);
+  for (let i=0;i<NP;i++){ const r=2.4+Math.random()*2.4, th=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1);
+    pv[i*3]=r*Math.sin(ph)*Math.cos(th); pv[i*3+1]=r*Math.sin(ph)*Math.sin(th); pv[i*3+2]=r*Math.cos(ph); }
+  const pgeo = new THREE.BufferGeometry(); pgeo.setAttribute('position', new THREE.BufferAttribute(pv,3));
+  const PARTS_MAT = new THREE.PointsMaterial({ color:0x6fd8ff, size:0.03, transparent:true, opacity:.7 });
+  const PARTS = new THREE.Points(pgeo, PARTS_MAT); scene.add(PARTS);
+
+  // ===== VARIANTES (3 aros rotando + nucleo) =====
+  const CFG = {
+    1: { nombre:'1 · CIAN',     aro:0x00e5ff, emis:0x00cfee, core:0x00e5ff, coreEmis:0x00b8d8, dentro:0x8fe4ff, acento:0x00e5ff, orden:'aleatorio' },
+    2: { nombre:'2 · ORDENADO', aro:0x00e5ff, emis:0x00cfee, core:0x00e5ff, coreEmis:0x00b8d8, dentro:0x8fe4ff, acento:0x00e5ff, orden:'giroscopio' },
+    3: { nombre:'3 · HIELO',    aro:0xaee8ff, emis:0x66ccff, core:0xbfe6ff, coreEmis:0x4aa6ff, dentro:0xdff6ff, acento:0x9fdfff, orden:'aleatorio' },
+    4: { nombre:'4 · DORADO',   aro:0xffcf66, emis:0xffaa22, core:0xffd27a, coreEmis:0xff9b1a, dentro:0xffe6b0, acento:0xffc24d, orden:'giroscopio' },
+  };
+
+  let grupo = null, RINGS = [], CORE = null, COREINT = null;
+  function construir(n){
+    if (grupo) scene.remove(grupo);
+    const cf = CFG[n];
+    grupo = new THREE.Group(); RINGS = []; scene.add(grupo);
+
+    CORE = new THREE.Mesh(new THREE.IcosahedronGeometry(1.05, 2),
+      new THREE.MeshStandardMaterial({ color:cf.core, emissive:cf.coreEmis, emissiveIntensity:1.1, metalness:.4, roughness:.3, wireframe:true }));
+    grupo.add(CORE);
+    COREINT = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5, 3), new THREE.MeshBasicMaterial({ color:cf.dentro }));
+    grupo.add(COREINT);
+
+    const giro = [ {x:Math.PI/2,y:0}, {x:0,y:Math.PI/2}, {x:Math.PI/4,y:Math.PI/4} ];
+    for (let i=0;i<3;i++){
+      const t = new THREE.Mesh(new THREE.TorusGeometry(1.9 + i*0.45, 0.02, 16, 130),
+        new THREE.MeshStandardMaterial({ color:cf.aro, emissive:cf.emis, emissiveIntensity:0.9, metalness:.6, roughness:.4 }));
+      if (cf.orden==='giroscopio'){ t.rotation.x=giro[i].x; t.rotation.y=giro[i].y; }
+      else { t.rotation.x=Math.random()*Math.PI; t.rotation.y=Math.random()*Math.PI; }
+      grupo.add(t); RINGS.push(t);
+    }
+    luz.color.setHex(cf.acento);
+    PARTS_MAT.color.setHex(cf.dentro);
+    document.documentElement.style.setProperty('--cian', '#'+cf.acento.toString(16).padStart(6,'0'));
+    document.querySelectorAll('.selector button').forEach((b,k)=>b.classList.toggle('sel', k+1===n));
+  }
+
+  const sel = document.getElementById('selector');
+  for (let n=1;n<=4;n++){ const b=document.createElement('button'); b.textContent=CFG[n].nombre;
+    b.onclick=()=>construir(n); sel.appendChild(b); }
+  addEventListener('keydown', e=>{ if(e.key>='1'&&e.key<='4') construir(+e.key); });
+
+  const composer = new THREE.EffectComposer(renderer);
+  composer.addPass(new THREE.RenderPass(scene, camera));
+  const bloom = new THREE.UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.65, 0.5, 0.25);
+  composer.addPass(bloom);
+
+  let intensidad=0, objetivo=0;
+  window.setEstado = function(e){
+    const t=document.getElementById('estadoTexto');
+    if(e==='listening'){t.innerText='ESCUCHANDO…';objetivo=1;}
+    else if(e==='thinking'){t.innerText='PROCESANDO…';objetivo=0.6;}
+    else if(e==='speaking'){t.innerText='RESPONDIENDO…';objetivo=1;}
+    else {t.innerText='SISTEMAS EN LÍNEA';objetivo=0;}
+  };
+
+  construir(1);
+
+  const reloj = new THREE.Clock();
+  (function animar(){
+    requestAnimationFrame(animar);
+    const dt=reloj.getDelta(), tt=reloj.elapsedTime;
+    intensidad += (objetivo-intensidad)*Math.min(1,dt*4);
+
+    const latido = 1 + Math.sin(tt*2.4)*0.04 + intensidad*0.12;
+    CORE.scale.setScalar(latido); COREINT.scale.setScalar(latido*0.95);
+    CORE.rotation.y += dt*(0.25+intensidad*0.7); CORE.rotation.x += dt*0.12;
+    CORE.material.emissiveIntensity = 0.9 + intensidad*0.7 + Math.sin(tt*6)*0.12;
+    bloom.strength = 0.55 + intensidad*0.35;
+    RINGS.forEach((a,i)=>{ a.rotation.z += dt*(0.5+i*0.28)*(1+intensidad);
+      a.rotation.x += dt*(0.22+i*0.12)*(1+intensidad*0.5); a.rotation.y += dt*0.1*(i+1); });
+    PARTS.rotation.y += dt*0.05; PARTS.rotation.x += dt*0.02;
+
+    composer.render();
+  })();
+
+  addEventListener('resize', ()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight); composer.setSize(innerWidth,innerHeight); });
+
+  const hx=n=>Math.floor(Math.random()*16**n).toString(16).toUpperCase().padStart(n,'0');
+  setInterval(()=>{ let a="",b=""; for(let i=0;i<16;i++){a+=`0x${hx(4)}  ${(Math.random()*100).toFixed(1)}%\n`;b+=`${hx(6)}  ·\n`;} ladoIzq.innerText=a; ladoDer.innerText=b; },1100);
+  let demo=['online','listening','thinking','speaking'],di=0;
+  setInterval(()=>window.setEstado(demo[di++%demo.length]),3000);
+} catch(e) {
+  document.getElementById('err').innerText = 'Error 3D: ' + e.message;
+}
+</script>
+</body>
+</html>
