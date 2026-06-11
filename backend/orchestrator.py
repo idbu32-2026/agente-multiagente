@@ -66,6 +66,25 @@ def _is_inside_project(path: str) -> bool:
         # Rutas en otra unidad o formato raro -> por seguridad, tratar como fuera.
         return False
 
+# Archivos que NUNCA se auto-aprueban aunque esten dentro del proyecto:
+# secretos (.env*), historial de git, y lanzadores (.ps1/.bat/.lnk — uno de
+# ellos arranca con Windows: reescribirlo seria persistir codigo sin que el
+# usuario lo vea). Sobrescribir con Write equivale a borrar, y borrar esta
+# prohibido; estos piden SIEMPRE permiso humano.
+_SUFIJOS_PROTEGIDOS = (".ps1", ".bat", ".lnk")
+
+def _es_archivo_protegido(path: str) -> bool:
+    if not path:
+        return False
+    nombre = os.path.basename(path).lower()
+    partes = {p.lower() for p in os.path.normpath(path).split(os.sep)}
+    return (
+        nombre.startswith(".env")
+        or ".git" in partes
+        or nombre.endswith(_SUFIJOS_PROTEGIDOS)
+    )
+
+
 # Tipo del callback que pide aprobacion al humano y devuelve la decision.
 # Recibe (tool_name, input_data) y devuelve {"approved": bool, "reason": str}.
 AskHuman = Callable[[str, dict], Awaitable[dict]]
@@ -128,10 +147,12 @@ def build_options(ask_human: AskHuman) -> ClaudeAgentOptions:
             print(f"[bloqueado] {tool_name}: {motivo}", flush=True)
             return PermissionResultDeny(message=motivo, interrupt=False)
 
-        # AUTONOMIA CON LIMITES: escribir/editar DENTRO del proyecto se auto-aprueba.
-        # Borrar, comandos (Bash) o rutas fuera del proyecto -> piden permiso.
-        if tool_name in SAFE_WRITE_TOOLS and _is_inside_project(input_data.get("file_path", "")):
-            print(f"[auto] {tool_name} dentro del proyecto -> auto-aprobado: {input_data.get('file_path')}", flush=True)
+        # AUTONOMIA CON LIMITES: escribir/editar DENTRO del proyecto se auto-aprueba
+        # (salvo archivos protegidos: .env, .git, lanzadores). Borrar, comandos
+        # (Bash) o rutas fuera del proyecto -> piden permiso.
+        ruta = input_data.get("file_path", "")
+        if tool_name in SAFE_WRITE_TOOLS and _is_inside_project(ruta) and not _es_archivo_protegido(ruta):
+            print(f"[auto] {tool_name} dentro del proyecto -> auto-aprobado: {ruta}", flush=True)
             return PermissionResultAllow(updated_input=input_data)
 
         print(f"[checkpoint] can_use_tool llamado para: {tool_name}", flush=True)

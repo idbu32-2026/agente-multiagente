@@ -80,6 +80,9 @@ WAKE_UMBRAL = float(os.getenv("JARVIS_WAKE_UMBRAL", "0.4"))
 # Tamano de frame que espera openWakeWord: 1280 muestras = 80 ms a 16 kHz.
 FRAME_LENGTH = 1280
 SAMPLE_RATE = 16000
+# Ganancia por software para micros flojos (se lee UNA vez; antes se consultaba
+# el entorno en cada frame, ~12 veces por segundo).
+GANANCIA = float(os.getenv("JARVIS_GAIN", "1.0"))
 
 # Reglas de precision de Luis (las mismas que aplica su asesor de Claude Code):
 # no inventar, decir "no lo se", buscar lo actual en la web, separar hecho de
@@ -230,6 +233,19 @@ def _normalizar(texto: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _es_orden(texto_cmd: str, frases: tuple, max_palabras: int = 4) -> bool:
+    """True si el texto (ya normalizado) es una ORDEN corta que contiene una frase.
+
+    El limite de palabras evita falsos positivos por subcadena: sin el,
+    preguntar 'que resolucion tiene mi pantalla' abria el HUD (contiene
+    'pantalla') en vez de responder, y una frase larga con 'hasta luego'
+    dentro cerraba la sesion sin querer.
+    """
+    if len(texto_cmd.split()) > max_palabras:
+        return False
+    return any(p in texto_cmd for p in frases)
+
+
 def _es_afirmativo(texto: str) -> bool:
     """True si la respuesta hablada del usuario es un 'si' a conceder permiso.
 
@@ -301,10 +317,12 @@ class Cerebro:
             content = getattr(message, "content", None)
             if not content:
                 continue
-            for block in content:
-                t = getattr(block, "text", None)
-                if t:
-                    respuesta = t  # nos quedamos con el ultimo bloque de texto
+            # Nos quedamos con el ULTIMO MENSAJE que tenga texto, pero entero:
+            # antes se guardaba solo el ultimo bloque y, si la respuesta final
+            # venia en varios bloques, se perdia todo menos el final.
+            partes = [t for block in content if (t := getattr(block, "text", None))]
+            if partes:
+                respuesta = " ".join(partes)
         return (respuesta or f"Ahora mismo no puedo responder, {USER_NAME}.").strip()
 
     async def cerrar(self) -> None:
@@ -334,6 +352,7 @@ class CerebroActuador(Cerebro):
         from backend.orchestrator import (
             AUTO_APPROVED_TOOLS,
             SAFE_WRITE_TOOLS,
+            _es_archivo_protegido,
             _is_inside_project,
             comando_prohibido,
         )
@@ -346,9 +365,11 @@ class CerebroActuador(Cerebro):
             motivo = comando_prohibido(tool_name, input_data)
             if motivo:
                 return PermissionResultDeny(message=motivo, interrupt=False)
-            # Escribir/editar DENTRO del proyecto -> auto-aprobado (autonomia con limites).
-            if tool_name in SAFE_WRITE_TOOLS and _is_inside_project(input_data.get("file_path", "")):
-                print(f"[auto] {tool_name} dentro del proyecto -> auto-aprobado: {input_data.get('file_path')}", flush=True)
+            # Escribir/editar DENTRO del proyecto -> auto-aprobado (autonomia con
+            # limites), salvo archivos protegidos (.env, .git, lanzadores).
+            ruta = input_data.get("file_path", "")
+            if tool_name in SAFE_WRITE_TOOLS and _is_inside_project(ruta) and not _es_archivo_protegido(ruta):
+                print(f"[auto] {tool_name} dentro del proyecto -> auto-aprobado: {ruta}", flush=True)
                 return PermissionResultAllow(updated_input=input_data)
             # El resto (Bash, borrar, fuera del proyecto) -> permiso por voz.
             decision = await ask_human(tool_name, input_data)
@@ -411,10 +432,12 @@ class Voz:
     def decir(self, texto: str) -> None:
         print(f"{self.nombre}> {texto}")
         try:
+            # Timeout proporcional al texto: a ~12 caracteres/seg de habla, 60s
+            # fijos cortaban a mitad de frase cualquier respuesta larga.
             subprocess.run(
                 [sys.executable, self._worker, str(self.rate), self.voice_id],
                 input=texto.encode("utf-8"),
-                timeout=60,
+                timeout=max(60, len(texto) // 8),
             )
         except Exception as e:  # si el TTS falla, JARVIS ya respondio por texto
             print(f"[voz] No se pudo reproducir la voz: {e}")
@@ -446,6 +469,8 @@ def _cargar_wakeword():
 
 def _transcribir(modelo, audio_int16) -> str:
     import numpy as np
+    if not audio_int16:  # silencio (ver _grabar_mandato): nada que transcribir
+        return ""
     audio = np.array(audio_int16, dtype="float32") / 32768.0
     segmentos, _ = modelo.transcribe(audio, language="es", beam_size=1)
     return " ".join(s.text for s in segmentos).strip()
@@ -460,10 +485,9 @@ def _leer_amplificado(recorder):
     """
     import numpy as np
     frame = recorder.read()
-    ganancia = float(os.getenv("JARVIS_GAIN", "1.0"))
-    if ganancia == 1.0:
+    if GANANCIA == 1.0:
         return frame
-    amplificado = np.clip(np.array(frame, dtype="float32") * ganancia, -32768, 32767)
+    amplificado = np.clip(np.array(frame, dtype="float32") * GANANCIA, -32768, 32767)
     return amplificado.astype(np.int16).tolist()
 
 
@@ -500,6 +524,11 @@ def _grabar_mandato(recorder):
             break
         if (ahora - inicio) > max_seg:
             break
+    if not hubo_voz:
+        # Solo hubo silencio: NO se lo pases a Whisper. Con silencio, Whisper
+        # ALUCINA frases enteras ("Subtitulos por la comunidad...", o un "Si")
+        # — inaceptable justo donde se decide un permiso por voz.
+        return []
     return audio
 
 
@@ -535,10 +564,17 @@ def _hacer_ask_human_voz(voz: "Voz", recorder, whisper):
             or ""
         )
         sobre = f" sobre {detalle}" if detalle else ""
-        voz.decir(f"Necesito tu permiso para usar {tool_name}{sobre}. ¿Lo autorizas?")
-        _drenar_microfono(recorder)
-        audio = _grabar_mandato(recorder)
-        respuesta = _transcribir(whisper, audio)
+
+        def _preguntar_por_voz() -> str:
+            voz.decir(f"Necesito tu permiso para usar {tool_name}{sobre}. ¿Lo autorizas?")
+            _drenar_microfono(recorder)
+            audio = _grabar_mandato(recorder)
+            return _transcribir(whisper, audio)
+
+        # En un hilo aparte: hablar + grabar + transcribir tarda muchos segundos
+        # y es codigo SINCRONO. Hecho directamente aqui congelaria el event loop
+        # entero (incluida la conexion del SDK) mientras dura el permiso.
+        respuesta = await asyncio.get_running_loop().run_in_executor(None, _preguntar_por_voz)
         print(f"[permiso] {USER_NAME} respondio: {respuesta!r}", flush=True)
         if _es_afirmativo(respuesta):
             voz.decir("Hecho.")
@@ -628,21 +664,42 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             print(f"{USER_NAME}> {texto}")
             # Normalizado (sin tildes/signos): asi 'Adiós, Travis.' si coincide.
             texto_cmd = _normalizar(texto)
-            if any(p in texto_cmd for p in FRASES_SALIR):
+            if _es_orden(texto_cmd, FRASES_SALIR):
                 voz.decir(f"Hasta luego, {USER_NAME}.")
                 break
-            if any(p in texto_cmd for p in FRASES_HUD):
+            if _es_orden(texto_cmd, FRASES_HUD):
                 _abrir_hud(voz)
                 _escribir_estado("esperando", texto)
                 continue
             _escribir_estado("pensando", texto)
-            respuesta = loop.run_until_complete(cerebro.preguntar(texto))
+            # Un fallo del cerebro (sin internet, error de API, SDK caido) NO
+            # debe matar a JARVIS: es un asistente siempre activo. Se avisa por
+            # voz, se reconecta y se sigue escuchando.
+            try:
+                respuesta = loop.run_until_complete(cerebro.preguntar(texto))
+            except Exception as e:
+                print(f"[cerebro] Error en el turno: {e}", flush=True)
+                voz.decir("He perdido la conexion con mi cerebro. Dame un momento, lo reinicio.")
+                try:
+                    loop.run_until_complete(cerebro.cerrar())
+                except Exception:
+                    pass
+                try:
+                    loop.run_until_complete(cerebro.abrir())
+                    voz.decir("Listo. He perdido el hilo de la charla; repitemelo, por favor.")
+                except Exception as e2:
+                    print(f"[cerebro] No se pudo reconectar: {e2}", flush=True)
+                    voz.decir("No consigo reconectar. Revisa internet o reiniciame.")
+                _escribir_estado("esperando")
+                continue
             _escribir_estado("hablando", texto, respuesta)
             voz.decir(respuesta)
+            _drenar_microfono(recorder)  # anti-eco: que no se oiga a si mismo
             _escribir_estado("esperando", texto, respuesta)
     except KeyboardInterrupt:
         print("\n[voz] Cerrando JARVIS...")
     finally:
+        _escribir_estado("apagado")  # el HUD muestra DESCONECTADO, no "en linea"
         recorder.stop()
         recorder.delete()
         loop.run_until_complete(cerebro.cerrar())
