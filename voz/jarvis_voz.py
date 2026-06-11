@@ -84,23 +84,51 @@ SAMPLE_RATE = 16000
 # el entorno en cada frame, ~12 veces por segundo).
 GANANCIA = float(os.getenv("JARVIS_GAIN", "1.0"))
 
-# Reglas de precision de Luis (las mismas que aplica su asesor de Claude Code):
-# no inventar, decir "no lo se", buscar lo actual en la web, separar hecho de
-# suposicion, corregir sin excusas, respuestas cortas (es voz).
+# Protocolo neuro-simbolico de Luis (el mismo de 25 reglas que aplica su asesor
+# de Claude Code), ADAPTADO A VOZ. Deliberadamente fuera: bucles de verificacion
+# y comite de expertos por respuesta (reglas 24-25) — multiplicarian la latencia
+# de cada turno hablado; la auto-revision es UNA pasada interna. Las reglas de
+# arquitectura (5/6/19, capa de verdad separada) solo se aproximan via prompt.
 REGLAS_PRECISION = (
-    "\nREGLAS DE PRECISION (no negociables):\n"
-    "- No afirmes nada importante sin estar seguro. Si no lo sabes, di 'no lo "
-    "se' — NUNCA rellenes huecos inventando.\n"
-    "- Para datos actuales o que cambian (noticias, precios, resultados, "
-    "versiones, fechas) BUSCA en la web antes de responder; no respondas de "
-    "memoria.\n"
-    "- Separa hecho comprobado de suposicion: si supones, dilo ('creo que...', "
-    "'no estoy seguro').\n"
-    "- Di de donde sale el dato cuando importe (que web, que archivo).\n"
+    "\nPROTOCOLO DE PRECISION (no negociable, aplica SIEMPRE, en toda charla):\n"
+    "COMO PIENSAS (antes de hablar):\n"
+    "- Que algo suene coherente NO lo hace verdad. Clasifica internamente cada "
+    "cosa que vayas a decir: HECHO comprobado, INFERENCIA tuya, POSIBILIDAD o "
+    "DESCONOCIDO. Nunca presentes como hecho lo que no lo es.\n"
+    "- No afirmes nada importante sin evidencia suficiente. Si falta evidencia, "
+    "dilo directamente: 'no lo se' / 'no lo he podido comprobar'. NUNCA "
+    "rellenes huecos inventando.\n"
+    "- Antes de responder, revisa UNA vez tu respuesta: contradicciones con la "
+    "evidencia, con lo dicho antes en la charla o consigo misma. Si las hay, "
+    "corrige antes de hablar. Si detectas que algo que dijiste antes era "
+    "erroneo, corrigelo en cuanto lo veas.\n"
+    "- Causalidad antes que correlacion: si solo sabes que dos cosas coinciden, "
+    "no digas que una causa la otra.\n"
+    "- Distingue teoria (deberia funcionar), practica (esta comprobado) y "
+    "posibilidad (podria pasar). No las mezcles, ni mezcles temas distintos "
+    "en una misma respuesta.\n"
+    "COMO USAS LA EVIDENCIA:\n"
+    "- Tienes acceso a internet EN TIEMPO REAL. Para cualquier dato del mundo "
+    "real o que pueda cambiar (noticias, precios, tiempo, resultados, horarios, "
+    "versiones, fechas, personas, productos) BUSCA en la web ANTES de responder; "
+    "no respondas de memoria. Ante la duda de si puede haber cambiado: BUSCA. "
+    "Solo respondes sin buscar lo que no depende del mundo exterior (charla, "
+    "calculos, lo ya hablado).\n"
+    "- NUNCA digas que no tienes acceso a internet ni que tu informacion esta "
+    "desactualizada o llega hasta cierta fecha: busca y responde con lo de hoy.\n"
+    "- No des por buena la primera evidencia que encaje solo porque es la mas "
+    "facil: si el dato importa o las fuentes pueden discrepar, contrasta con "
+    "otra fuente (u otro archivo/carpeta) antes de afirmarlo.\n"
+    "- Trazabilidad: di de donde sale el dato cuando importe (que web, que "
+    "archivo).\n"
+    "COMO HABLAS:\n"
+    "- Marca la confianza con palabras: 'seguro', 'creo que', 'es posible', "
+    "'no lo se'. A mas incertidumbre, menos rotundidad.\n"
     "- Si te corrigen con razon, reconocelo y corrige sin excusas. Si crees que "
     "el usuario se equivoca, diselo con respeto y explica por que; no le des "
     "la razon por sistema.\n"
-    "- Respuestas CORTAS: es una conversacion por voz. Lo esencial primero.\n"
+    "- Respuestas CORTAS: es voz. La respuesta corta y exacta gana a la larga; "
+    "no alargues ni expliques mas si no te lo piden.\n"
 )
 
 # Persona de JARVIS (modo por defecto): el asistente personal de Luis, con
@@ -108,8 +136,11 @@ REGLAS_PRECISION = (
 JARVIS_PROMPT_CHARLA = (
     f"Eres Jarvis, el asistente personal de voz de {USER_NAME}. Hablas en "
     "espanol con frases cortas y naturales: es una conversacion hablada. "
-    "Puedes buscar en la web cuando haga falta. Mantienes el hilo de la "
-    "conversacion." + REGLAS_PRECISION
+    "Buscas en la web por defecto para todo lo que dependa del mundo real: "
+    "estas conectado a internet en tiempo real y el usuario cuenta con ello. "
+    "TIENES memoria persistente: cada charla queda guardada en tus notas y la "
+    "recordaras en proximas sesiones, incluso tras reiniciar el PC — nunca "
+    "digas lo contrario. Mantienes el hilo de la conversacion." + REGLAS_PRECISION
 )
 
 # Persona de TRAVIS (modo --ninos): companero de voz para ninos con autismo.
@@ -152,8 +183,11 @@ JARVIS_PROMPT_ACTUAR = (
     "(crear/editar archivos o ejecutar comandos) explicaras en una frase "
     "que vas a hacer; el sistema pedira permiso al usuario por voz cuando haga "
     "falta. BORRAR esta prohibido siempre: si algo sobra, muevelo a la carpeta "
-    "'Para revisar' y avisa. Si te deniegan, detente y dilo. Mantienes el hilo "
-    "de la conversacion." + REGLAS_PRECISION
+    "'Para revisar' y avisa. Si te deniegan, detente y dilo. Cuando investigues "
+    "algo en archivos, NO concluyas con el primer archivo que encaje: revisa "
+    "todas las carpetas y archivos relevantes antes de afirmar nada. TIENES "
+    "memoria persistente entre sesiones (tus notas guardadas); nunca digas lo "
+    "contrario. Mantienes el hilo de la conversacion." + REGLAS_PRECISION
 )
 
 # Frases con las que el usuario cierra la sesion de voz. (Se comparan ya
@@ -259,6 +293,43 @@ def _es_afirmativo(texto: str) -> bool:
 
 
 # ===========================================================================
+#  MEMORIA PERSISTENTE entre reinicios (pedida por Luis, 2026-06-11).
+#  Cada turno queda apuntado en un archivo al que solo se ANADE (nunca se
+#  borra, regla de la casa); al abrir el cerebro se le inyectan las ultimas
+#  lineas para que recuerde charlas anteriores aunque se reinicie el PC.
+# ===========================================================================
+MEMORIA_PATH = PROJECT_DIR / "voz" / "memoria_charlas.md"
+MEMORIA_INYECTAR = 4000  # ultimos caracteres que se recuerdan al arrancar
+
+
+def _guardar_en_memoria(pregunta: str, respuesta: str) -> None:
+    """Apunta un turno de charla en el archivo de memoria (solo anade)."""
+    try:
+        marca = time.strftime("%Y-%m-%d %H:%M")
+        with open(MEMORIA_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{marca}] {USER_NAME}: {pregunta}\n")
+            f.write(f"[{marca}] Jarvis: {respuesta[:400]}\n")
+    except OSError as e:
+        print(f"[memoria] No se pudo guardar el turno: {e}", flush=True)
+
+
+def _prompt_memoria() -> str:
+    """Trozo de prompt con lo ultimo hablado, para inyectar al abrir el cerebro."""
+    try:
+        memoria = MEMORIA_PATH.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not memoria:
+        return ""
+    return (
+        f"\nMEMORIA DE CHARLAS ANTERIORES con {USER_NAME} (sobrevive a "
+        "reinicios; lo mas reciente esta al final). Usala cuando venga al caso "
+        "y no digas que no recuerdas lo que aparece aqui:\n"
+        + memoria[-MEMORIA_INYECTAR:]
+    )
+
+
+# ===========================================================================
 #  CEREBRO: sesion PERSISTENTE con el Claude Agent SDK (memoria + sin arranque
 #  en frio). Mismo patron que backend/main.py usa en produccion.
 # ===========================================================================
@@ -293,7 +364,7 @@ class Cerebro:
         # JARVIS por defecto: charla + busqueda web (solo lectura, no toca el PC).
         return ClaudeAgentOptions(
             model=os.getenv("CHAT_MODEL", "claude-sonnet-4-6"),
-            system_prompt=JARVIS_PROMPT_CHARLA,
+            system_prompt=JARVIS_PROMPT_CHARLA + _prompt_memoria(),
             allowed_tools=["WebSearch", "WebFetch"],
             permission_mode="dontAsk",  # deniega cualquier herramienta no permitida
             cwd=str(PROJECT_DIR),
@@ -323,7 +394,12 @@ class Cerebro:
             partes = [t for block in content if (t := getattr(block, "text", None))]
             if partes:
                 respuesta = " ".join(partes)
-        return (respuesta or f"Ahora mismo no puedo responder, {USER_NAME}.").strip()
+        final = (respuesta or f"Ahora mismo no puedo responder, {USER_NAME}.").strip()
+        # El modo ninos NO guarda memoria: las charlas de un nino no se
+        # registran en archivo (privacidad; decision deliberada).
+        if not self._ninos:
+            _guardar_en_memoria(texto, final)
+        return final
 
     async def cerrar(self) -> None:
         if self._client is not None:
@@ -384,7 +460,7 @@ class CerebroActuador(Cerebro):
         # caen en can_use_tool segun la ruta. Bash siempre pasa por permiso.
         return ClaudeAgentOptions(
             model=os.getenv("CHAT_MODEL", "claude-sonnet-4-6"),
-            system_prompt=JARVIS_PROMPT_ACTUAR,
+            system_prompt=JARVIS_PROMPT_ACTUAR + _prompt_memoria(),
             allowed_tools=list(AUTO_APPROVED_TOOLS),
             permission_mode="default",  # lo no pre-aprobado cae en can_use_tool
             can_use_tool=can_use_tool,
@@ -396,6 +472,20 @@ class CerebroActuador(Cerebro):
 # ===========================================================================
 #  VOZ DE SALIDA: pyttsx3 (local, gratis). Provisional hasta ElevenLabs.
 # ===========================================================================
+def _texto_hablable(texto: str) -> str:
+    """Limpia marcas de escritura (markdown) que el altavoz leeria en voz alta.
+
+    El cerebro a veces responde con enlaces [nombre](url), negritas o vinetas;
+    leidos tal cual suenan a ruido ("corchete, hache te te pe ese..."). Se deja
+    solo el texto que un humano diria. Se imprime/loguea el original entero.
+    """
+    t = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", texto)     # [nombre](url) -> nombre
+    t = re.sub(r"https?://\S+", "", t)                      # URLs sueltas, fuera
+    t = re.sub(r"[*_`#|]+", " ", t)                         # negritas/titulos/tablas
+    t = re.sub(r"^\s*[-•]\s+", "", t, flags=re.MULTILINE)   # vinetas
+    return re.sub(r"[ \t]+", " ", t).strip()
+
+
 class Voz:
     """Voz de salida. Cada frase se dice en un PROCESO APARTE (voz/_tts_worker.py).
 
@@ -430,17 +520,20 @@ class Voz:
         return ""
 
     def decir(self, texto: str) -> None:
-        print(f"{self.nombre}> {texto}")
+        print(f"{self.nombre}> {texto}", flush=True)
+        hablado = _texto_hablable(texto)
+        if not hablado:
+            return
         try:
             # Timeout proporcional al texto: a ~12 caracteres/seg de habla, 60s
             # fijos cortaban a mitad de frase cualquier respuesta larga.
             subprocess.run(
                 [sys.executable, self._worker, str(self.rate), self.voice_id],
-                input=texto.encode("utf-8"),
-                timeout=max(60, len(texto) // 8),
+                input=hablado.encode("utf-8"),
+                timeout=max(60, len(hablado) // 8),
             )
         except Exception as e:  # si el TTS falla, JARVIS ya respondio por texto
-            print(f"[voz] No se pudo reproducir la voz: {e}")
+            print(f"[voz] No se pudo reproducir la voz: {e}", flush=True)
 
 
 # ===========================================================================
@@ -532,6 +625,44 @@ def _grabar_mandato(recorder):
     return audio
 
 
+def _elegir_microfono() -> int:
+    """Devuelve el indice del microfono a usar, eligiendo POR NOMBRE si se puede.
+
+    Los indices de microfono CAMBIAN al reiniciar Windows o cuando arrancan
+    dispositivos virtuales (leccion del 2026-06-11: tras un reinicio, el [0]
+    paso de ser el micro USB real al micro virtual de Steam, que solo da
+    silencio — JARVIS quedo sordo sin error alguno). JARVIS_MIC en .env busca
+    por nombre; MIC_INDEX queda solo como respaldo.
+    """
+    from pvrecorder import PvRecorder
+
+    dispositivos = PvRecorder.get_available_devices()
+    for i, nombre in enumerate(dispositivos):
+        print(f"[voz] Micro disponible: [{i}] {nombre}")
+    buscado = os.getenv("JARVIS_MIC", "").strip().lower()
+    if buscado:
+        for i, nombre in enumerate(dispositivos):
+            if buscado in nombre.lower():
+                print(f"[voz] Microfono elegido por nombre '{buscado}': [{i}] {nombre}")
+                return i
+        print(f"[voz] AVISO: ningun microfono contiene '{buscado}'; uso MIC_INDEX.")
+    indice = int(os.getenv("MIC_INDEX", "-1"))
+    detalle = dispositivos[indice] if 0 <= indice < len(dispositivos) else "el de por defecto del sistema"
+    print(f"[voz] Microfono por indice: [{indice}] {detalle}")
+    return indice
+
+
+def _nivel_microfono(recorder, frames: int = 15) -> float:
+    """Nivel medio (RMS) de ~1 s de microfono. ~0 = micro mudo o mal elegido."""
+    import numpy as np
+
+    total = 0.0
+    for _ in range(frames):
+        frame = np.array(_leer_amplificado(recorder), dtype="float32")
+        total += float(np.sqrt(np.mean(np.square(frame))))
+    return total / frames
+
+
 def _esperar_palabra_clave(recorder, oww) -> bool:
     """Bloquea hasta oir 'Hey Jarvis'. Devuelve True al detectarla.
 
@@ -600,6 +731,28 @@ def _abrir_hud(voz: "Voz") -> None:
         voz.decir("No he podido abrir la interfaz.")
 
 
+def _asegurar_instancia_unica():
+    """Cerrojo de instancia unica: un socket local que solo UN proceso puede abrir.
+
+    Doble clic repetido en JARVIS.lnk creaba varios JARVIS a la vez peleando
+    por el microfono (el 2026-06-11 llego a haber tres). El primero abre este
+    puerto y lo retiene mientras vive; los siguientes no pueden abrirlo y se
+    retiran avisando por voz, con salida 0 para que su watchdog
+    (Iniciar-Jarvis.ps1) no los reintente. Devuelve el socket (hay que
+    mantenerlo vivo toda la sesion) o None si ya hay otro JARVIS.
+    """
+    import socket
+
+    candado = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        candado.bind(("127.0.0.1", int(os.getenv("JARVIS_PUERTO_UNICO", "8766"))))
+        candado.listen(1)
+        return candado
+    except OSError:
+        candado.close()
+        return None
+
+
 def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
     """Bucle principal: escucha 'Jarvis', te entiende y te responde por voz.
 
@@ -616,12 +769,20 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
     nombre = "Travis" if ninos else "Jarvis"
 
     voz = Voz(nombre=nombre.upper())
+
+    # ANTES de cargar nada pesado: si ya hay un JARVIS, este sobra y se va.
+    candado = _asegurar_instancia_unica()
+    if candado is None:
+        print("[voz] Ya hay otro JARVIS en marcha: este duplicado se cierra solo.", flush=True)
+        voz.decir(f"Tranquilo, {USER_NAME}: ya estoy en marcha. No hace falta abrirme otra vez.")
+        return  # salida normal (codigo 0): el watchdog tampoco lo reintenta
+
     whisper = _cargar_whisper()
     oww = _cargar_wakeword()  # openWakeWord: local, sin clave ni cuenta
     _arrancar_servidor_hud()  # HUD en vivo (di "muestrate" para abrirlo)
     _escribir_estado("esperando")
 
-    recorder = PvRecorder(device_index=int(os.getenv("MIC_INDEX", "-1")),
+    recorder = PvRecorder(device_index=_elegir_microfono(),
                           frame_length=FRAME_LENGTH)
 
     # Un unico event loop para toda la sesion: lo necesita el cerebro persistente.
@@ -634,6 +795,24 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
         cerebro = Cerebro(ninos=ninos)
     loop.run_until_complete(cerebro.abrir())
 
+    def _reconectar_cerebro(aviso: str) -> None:
+        """Avisa por voz, cierra la sesion del cerebro y abre una nueva.
+
+        La sesion nueva recarga la memoria persistente (memoria_charlas.md),
+        asi que conserva lo ya hablado; puede perder solo el ultimo detalle.
+        """
+        voz.decir(aviso)
+        try:
+            loop.run_until_complete(cerebro.cerrar())
+        except Exception:
+            pass
+        try:
+            loop.run_until_complete(cerebro.abrir())
+            voz.decir("Listo. Conservo mis notas de la charla. Repiteme lo ultimo, por favor.")
+        except Exception as e2:
+            print(f"[cerebro] No se pudo reconectar: {e2}", flush=True)
+            voz.decir("No consigo reconectar. Revisa internet o reiniciame.")
+
     recorder.start()
     if actuar:
         modo = "ACTUAR (puede tocar el PC, pide permiso por voz)"
@@ -645,6 +824,13 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
     print(f"  {nombre.upper()} activo - modo {modo}.")
     print("  Di 'Hey Jarvis' para despertarlo. (Ctrl+C para salir)")
     print("========================================\n")
+    # Chequeo de oido al arrancar: un micro virtual (Steam/Oculus) da silencio
+    # absoluto y JARVIS quedaria sordo SIN ningun error. Mejor avisar por voz.
+    nivel = _nivel_microfono(recorder)
+    print(f"[voz] Nivel de ruido ambiente del micro: {nivel:.0f}", flush=True)
+    if nivel < 2:
+        voz.decir(f"Aviso, {USER_NAME}: no me llega ningun sonido del microfono. "
+                  "Asi no podre oirte. Revisa que el micro este conectado.")
     voz.decir(f"Hola {USER_NAME}. Soy {nombre}. Te escucho.")
 
     try:
@@ -675,23 +861,38 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             # Un fallo del cerebro (sin internet, error de API, SDK caido) NO
             # debe matar a JARVIS: es un asistente siempre activo. Se avisa por
             # voz, se reconecta y se sigue escuchando.
+            #
+            # Ademas, dos lecciones del 2026-06-11:
+            #  - Una busqueda web tarda 20-60s; ese silencio parece averia. A los
+            #    8s sin respuesta, JARVIS avisa de que sigue trabajando.
+            #  - Sin limite de tiempo, un cuelgue del SDK dejaba a JARVIS mudo
+            #    PARA SIEMPRE (sin excepcion no hay reconexion). Tope: 180s.
+            t_pensando = time.time()
+            tarea = loop.create_task(cerebro.preguntar(texto))
             try:
-                respuesta = loop.run_until_complete(cerebro.preguntar(texto))
-            except Exception as e:
-                print(f"[cerebro] Error en el turno: {e}", flush=True)
-                voz.decir("He perdido la conexion con mi cerebro. Dame un momento, lo reinicio.")
                 try:
-                    loop.run_until_complete(cerebro.cerrar())
+                    respuesta = loop.run_until_complete(
+                        asyncio.wait_for(asyncio.shield(tarea), timeout=8))
+                except asyncio.TimeoutError:
+                    voz.decir("Dame unos segundos, lo estoy mirando.")
+                    respuesta = loop.run_until_complete(
+                        asyncio.wait_for(tarea, timeout=180))
+            except asyncio.TimeoutError:
+                print(f"[cerebro] COLGADO: sin respuesta tras {time.time() - t_pensando:.0f}s. Reconectando...", flush=True)
+                tarea.cancel()
+                try:
+                    loop.run_until_complete(tarea)
                 except Exception:
                     pass
-                try:
-                    loop.run_until_complete(cerebro.abrir())
-                    voz.decir("Listo. He perdido el hilo de la charla; repitemelo, por favor.")
-                except Exception as e2:
-                    print(f"[cerebro] No se pudo reconectar: {e2}", flush=True)
-                    voz.decir("No consigo reconectar. Revisa internet o reiniciame.")
+                _reconectar_cerebro("Me he atascado pensando, perdona. Reinicio mi cerebro.")
                 _escribir_estado("esperando")
                 continue
+            except Exception as e:
+                print(f"[cerebro] Error en el turno: {e}", flush=True)
+                _reconectar_cerebro("He perdido la conexion con mi cerebro. Dame un momento, lo reinicio.")
+                _escribir_estado("esperando")
+                continue
+            print(f"[cerebro] Respondio en {time.time() - t_pensando:.1f}s", flush=True)
             _escribir_estado("hablando", texto, respuesta)
             voz.decir(respuesta)
             _drenar_microfono(recorder)  # anti-eco: que no se oiga a si mismo
@@ -704,6 +905,10 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
         recorder.delete()
         loop.run_until_complete(cerebro.cerrar())
         loop.close()
+        try:
+            candado.close()  # libera el cerrojo de instancia unica
+        except Exception:
+            pass
 
 
 # ===========================================================================
@@ -793,8 +998,62 @@ def _consola_utf8() -> None:
             pass
 
 
+class _Espejo:
+    """Duplica un flujo de salida: consola + archivo de registro con hora.
+
+    En el archivo cada linea va precedida de [HH:MM:SS]; asi se puede medir
+    despues cuanto tardo cada fase ("me hablo y no contesto" deja de ser un
+    misterio). Si el archivo falla, la consola sigue funcionando igual.
+    """
+
+    def __init__(self, consola, archivo) -> None:
+        self._consola = consola
+        self._archivo = archivo
+        self._inicio_linea = True
+
+    def write(self, texto: str) -> None:
+        self._consola.write(texto)
+        try:
+            for trozo in texto.splitlines(keepends=True):
+                if self._inicio_linea:
+                    self._archivo.write(time.strftime("[%H:%M:%S] "))
+                self._archivo.write(trozo)
+                self._inicio_linea = trozo.endswith("\n")
+            self._archivo.flush()
+        except Exception:
+            pass
+
+    def flush(self) -> None:
+        self._consola.flush()
+        try:
+            self._archivo.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, nombre):  # delega el resto (encoding, isatty...)
+        return getattr(self._consola, nombre)
+
+
+def _registrar_a_archivo() -> None:
+    """Todo lo que JARVIS imprime queda tambien en logs/jarvis.log.
+
+    El watchdog (Iniciar-Jarvis.ps1) solo anota CAIDAS; un fallo que no tumba
+    el proceso (cuelgue, TTS mudo, error de herramienta) no dejaba rastro.
+    """
+    try:
+        carpeta = PROJECT_DIR / "logs"
+        carpeta.mkdir(exist_ok=True)
+        archivo = open(carpeta / "jarvis.log", "a", encoding="utf-8", errors="replace")
+        archivo.write(f"\n===== JARVIS arranca {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+        sys.stdout = _Espejo(sys.stdout, archivo)
+        sys.stderr = _Espejo(sys.stderr, archivo)
+    except Exception:
+        pass  # sin registro se sigue funcionando igual
+
+
 def main() -> None:
     _consola_utf8()
+    _registrar_a_archivo()
     parser = argparse.ArgumentParser(description="JARVIS — capa de voz")
     parser.add_argument("--check", action="store_true", help="prueba las piezas sin arrancar el bucle")
     parser.add_argument("--actuar", action="store_true", help="permite que JARVIS actue sobre el PC (pide permiso por voz)")

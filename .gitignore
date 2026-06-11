@@ -13,3 +13,11 @@ venv/
 
 # Estado en vivo del HUD (lo escribe jarvis_voz.py al correr)
 hud/estado.json
+
+# Datos personales y generados de la voz (NUNCA al historial):
+# - memoria_charlas.md: las conversaciones de Luis con Jarvis
+# - ultima_grabacion.wav: audio real del microfono (prueba_oido.py)
+# - cache_voz/: mp3 sintetizados por el TTS
+voz/memoria_charlas.md
+voz/ultima_grabacion.wav
+voz/cache_voz/
