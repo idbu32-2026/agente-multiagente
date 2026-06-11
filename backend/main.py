@@ -80,6 +80,35 @@ async def _answer_whatsapp(text: str) -> None:
     await notify(respuesta)
 
 
+def _firma_twilio_valida(request: Request, form) -> bool:
+    """Verifica la firma X-Twilio-Signature: el mensaje viene de Twilio DE VERDAD.
+
+    El filtro por remitente (From) no basta: ese campo lo escribe quien envia
+    la peticion y es falsificable. La firma es un HMAC con tu TWILIO_AUTH_TOKEN
+    sobre la URL publica exacta + los campos del formulario: sin el token (que
+    solo tienen Twilio y tu .env) no se puede fabricar.
+
+    Necesita WEBHOOK_PUBLIC_URL en .env = la URL del webhook TAL CUAL esta
+    escrita en la consola de Twilio (https://.../whatsapp). Si falta, se avisa
+    en consola y se mantiene el filtro antiguo para no romper el servicio —
+    pero la cerradura buena es la firma: configurala.
+    """
+    url_publica = (os.getenv("WEBHOOK_PUBLIC_URL") or "").strip()
+    token = (os.getenv("TWILIO_AUTH_TOKEN") or "").strip()
+    if not url_publica or not token:
+        print("[whatsapp] AVISO: sin WEBHOOK_PUBLIC_URL (o sin TWILIO_AUTH_TOKEN) "
+              "no se puede verificar la firma de Twilio; usando solo el filtro "
+              "por remitente (mas debil).", flush=True)
+        return True  # comportamiento antiguo, hasta que se configure la URL
+    from twilio.request_validator import RequestValidator
+
+    firma = request.headers.get("X-Twilio-Signature", "")
+    if RequestValidator(token).validate(url_publica, dict(form), firma):
+        return True
+    print("[whatsapp] RECHAZADO: firma de Twilio invalida (posible suplantacion).", flush=True)
+    return False
+
+
 @app.post("/whatsapp")
 async def whatsapp_webhook(request: Request) -> Response:
     """Buzon de entrada: Twilio envia aqui los WhatsApp que tu escribes.
@@ -91,8 +120,13 @@ async def whatsapp_webhook(request: Request) -> Response:
     body = (form.get("Body") or "").strip()
     sender = (form.get("From") or "").strip()
 
-    # SEGURIDAD: solo atendemos mensajes de TU numero (WHATSAPP_TO). Sin esto,
-    # cualquiera que escribiera al sandbox podria usar tu IA y gastar tu saldo.
+    # SEGURIDAD, dos cerraduras:
+    # 1) Firma de Twilio (criptografica, la fuerte) — ver _firma_twilio_valida.
+    # 2) Solo atendemos mensajes de TU numero (WHATSAPP_TO); sin esto cualquiera
+    #    que escribiera al sandbox podria usar tu IA y gastar tu saldo.
+    if not _firma_twilio_valida(request, form):
+        return Response(content="<Response></Response>", media_type="application/xml")
+
     allowed = (os.getenv("WHATSAPP_TO") or "").strip()
     if allowed and not allowed.startswith("whatsapp:"):
         allowed = f"whatsapp:{allowed}"
