@@ -1,10 +1,90 @@
-# Sistema Multiagente (semi-autonomo) sobre Claude Agent SDK
+# JARVIS — Asistente de voz siempre activo sobre un sistema multiagente
 
-Sistema de IA con un **orquestador** que coordina **subagentes especializados**,
-con **interfaz web** y **checkpoints humanos**: cualquier accion con efectos
-(escribir, editar, ejecutar comandos) requiere tu aprobacion en el navegador.
+> ⚖️ **Código publicado solo para su lectura (portafolio). Todos los derechos
+> reservados — ver [LICENSE.md](LICENSE.md). No está permitido copiarlo ni
+> reutilizarlo sin permiso escrito del autor.**
 
-## Arquitectura
+Un "Jarvis" real para el PC: un asistente de voz **siempre encendido** que
+arranca con Windows, escucha la palabra clave "Jarvis", conversa con voz
+neuronal, **busca en internet en tiempo real** y puede **actuar sobre el
+ordenador** pidiendo permiso por voz antes de cada acción sensible. Por
+debajo, un **sistema multiagente** construido sobre el Claude Agent SDK con
+checkpoints humanos, interfaz web, avisos por WhatsApp y un **bucle de
+automejora con aprobación humana**.
+
+Todo funciona en un PC doméstico con Windows, compartido con un niño que
+juega en él — y esa restricción real moldeó el diseño (modo silencio
+automático durante las partidas, reglas de seguridad no negociables).
+
+---
+
+## Cómo está construido
+
+### 1. Capa de voz (`voz/jarvis_voz.py`)
+
+```
+micrófono ──> wake word ──> grabación ──> Whisper ──> cerebro (Claude) ──> TTS
+   (pvrecorder)  (Vosk es)    (fin por        (faster-      (Agent SDK,        (edge-tts,
+                              silencio)       whisper)      web + acciones)    voz neural)
+```
+
+- **Wake word con Vosk** (reconocedor español 100% local, sin cuentas ni
+  claves): transcribe el audio en continuo y dispara al oír "Jarvis". Se
+  eligió tras comprobar que openWakeWord puntuaba bajo con acento español y
+  que Porcupine retiró su plan gratuito. El motor es conmutable
+  (`JARVIS_WAKE_MOTOR`): vosk / porcupine / openwakeword.
+- **Micrófono elegido por nombre, no por índice** (`JARVIS_MIC=usb audio`):
+  los índices de micro cambian al reiniciar Windows; elegir por nombre
+  sobrevive a reinicios. Al arrancar se mide el nivel ambiente y, si el
+  micro está mudo, Jarvis lo AVISA por voz.
+- **Transcripción** con faster-whisper (modelo `small`, multi-hilo). El
+  silencio puro se descarta sin pasar por Whisper (alucinaba frases con
+  silencio — peligroso cuando la frase es un permiso).
+- **Voz de salida**: edge-tts (voz neuronal es-ES en español), con tubería
+  por frases — se sintetiza la frase siguiente mientras suena la actual — y
+  caché de mp3. Fallback automático a pyttsx3 sin red.
+- **Robustez de asistente "siempre activo"**: timeouts con reconexión del
+  cerebro (un cuelgue del SDK no lo mata), aviso hablado a los pocos
+  segundos en búsquedas largas, anti-eco tras hablar, candado de instancia
+  única por socket local (un segundo Jarvis se retira solo), log con marca
+  de tiempo de todo lo que ocurre y un vigilante PowerShell que lo
+  resucita si se cae (con contador de caídas que se auto-resetea).
+
+### 2. Cerebro (Claude Agent SDK)
+
+- Sesión **persistente** (`ClaudeSDKClient`): mantiene el contexto entre
+  turnos sin arranque en frío.
+- **Memoria entre reinicios**: cada turno se apunta en un archivo (solo
+  añadir) y al abrir el cerebro se inyectan las últimas líneas en el system
+  prompt — Jarvis recuerda conversaciones de días anteriores.
+- **Búsqueda web por defecto**: el prompt ordena buscar cualquier dato del
+  mundo real antes de responder ("ante la duda, busca") y le prohíbe alegar
+  información desactualizada.
+- **Protocolo de precisión** integrado en el prompt: clasificar
+  hecho/inferencia/posibilidad/desconocido, no inventar, declarar
+  incertidumbre con una palabra, citar la fuente, corregirse sin excusas,
+  respuestas cortas (es voz).
+- **Modos**: charla (busca, no toca el PC) · actuar (puede crear/editar
+  archivos y ejecutar tareas, con permiso por voz) · niños (sin internet ni
+  herramientas, lenguaje literal y calmado, sin memoria — privacidad).
+
+### 3. Seguridad (en código, no en el prompt)
+
+- **Borrar está prohibido SIEMPRE**: un filtro deniega comandos de borrado
+  (rm/del/rmdir/format...) sin preguntar, acepta falsos positivos a
+  propósito (fail-safe). La alternativa del agente es mover a una carpeta
+  "Para revisar".
+- **Archivos protegidos**: tocar `.env*`, `.git/`, lanzadores `.ps1/.bat/
+  .lnk` exige aprobación humana aunque la acción esté dentro del proyecto
+  (el agente no puede reescribir su propio arranque sin permiso).
+- **Permisos por voz**: en modo actuar, las acciones con efectos se leen en
+  voz alta y solo continúan con un "sí" claro; ante silencio o duda, se
+  deniega.
+- **Modo silencio automático**: si hay un juego en marcha (registro de
+  Steam o ventana a pantalla completa), Jarvis ni salta ni habla — pero la
+  palabra clave sí puede despertarlo a propósito.
+
+### 4. Sistema multiagente con checkpoints humanos (`backend/`)
 
 ```
 Navegador (frontend/index.html)
@@ -19,72 +99,67 @@ Orquestador (Opus)  -- backend/orchestrator.py
 Checkpoints humanos -> can_use_tool() -> backend/approvals.py -> navegador
 ```
 
-- **Solo lectura** (`Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`) se auto-aprueban.
-- **Todo lo demas** dispara `can_use_tool`, que pregunta al navegador y espera tu decision.
-- `permission_mode="default"` para que los checkpoints funcionen y los subagentes
-  no hereden un modo permisivo.
+- Las herramientas de **solo lectura se auto-aprueban**; todo lo demás
+  dispara `can_use_tool`, que pregunta en el navegador (cola de
+  aprobaciones para peticiones simultáneas) y espera la decisión.
+- **Avisos por WhatsApp** (Twilio): cuando hace falta aprobar algo y cuando
+  termina una tarea. El webhook entrante **verifica la firma de Twilio**
+  (HMAC) y solo acepta mensajes del número autorizado.
+- Boletines programados (`news_digest.py`, `news_motogp.py`) reutilizan la
+  misma base como agentes de tarea única.
 
-## Requisitos
+### 5. HUD en vivo (`hud/`)
 
-- **Claude Code CLI instalado** y autenticado (el SDK lo descubre solo).
-- Python 3.10+.
+Interfaz visual estilo película con three.js (aros, núcleo, bloom): la capa
+de voz sirve `hud/` en localhost y escribe su estado real
+(esperando/escuchando/pensando/hablando/silencio) en un JSON que el HUD lee
+cada 400 ms. El núcleo late según el estado, suelta un **fogonazo al
+empezar a responder** y la luz **vibra al ritmo de la voz** mientras habla.
+Se abre por voz ("Jarvis... muéstrate").
 
-## Instalacion
+### 6. Automejora con gate humano (`voz/lecciones_jarvis.md`)
 
-```powershell
-cd C:\Users\travi\proyectos\agente-multiagente
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env   # opcional: ajusta modelo/host/puerto
-```
+El bucle: **fallo → lección → propuesta → aprobación humana → cambio →
+commit**.
 
-## Ejecutar
+- Jarvis **apunta solo** sus fallos: falsos despertares, transcripciones
+  fallidas, cuelgues, respuestas lentas. Si el usuario le corrige, el
+  cerebro añade una línea `LECCION:` que se extrae antes de hablar y va al
+  archivo.
+- Las lecciones **nunca se borran**: se marcan `TRATADA` o `DESCARTADA`.
+- Un ingeniero (humano o agente de mantenimiento) agrupa las lecciones por
+  causa raíz, propone mejoras concretas y **solo aplica lo aprobado**.
+  Primera vuelta real del bucle: la minería de los propios logs reveló que
+  un 37% de los despertares eran falsos y acababan con un "No te he
+  entendido" en voz alta que interrumpía la habitación; la mejora aprobada
+  fue callar y apuntar la lección.
 
-```powershell
-python run.py
-```
+### 7. Herramientas de diagnóstico (`voz/prueba_*.py`)
 
-Abre http://127.0.0.1:8000, escribe un objetivo y aprueba/deniega las acciones
-sensibles cuando aparezca el checkpoint.
+Cada problema real de producción dejó una herramienta reutilizable: probar
+el cerebro por texto sin micro, grabar y puntuar la wake word con análisis
+de tono, medir niveles de micrófono, validar el detector con un WAV, y
+extraer el JS del HUD para chequearlo con node. Lección aprendida: dos
+procesos leyendo el mismo micro se reparten los frames y ambos quedan medio
+sordos — las pruebas de audio se hacen siempre con Jarvis parado.
 
-## Archivos
+---
 
-| Archivo | Rol |
-|---|---|
-| `backend/orchestrator.py` | Define orquestador + subagentes y el callback de checkpoint |
-| `backend/approvals.py` | Broker async de aprobaciones pendientes |
-| `backend/notifier.py` | Notificaciones por WhatsApp via Twilio (opcional; no-op si no hay credenciales) |
-| `backend/main.py` | Servidor FastAPI + WebSocket + traduccion de mensajes del SDK |
-| `frontend/index.html` | UI: chat + modal de aprobacion |
-| `run.py` | Lanzador |
+## Stack
 
-## Avisos por WhatsApp (opcional, via Twilio)
+Python 3.12 · Claude Agent SDK (claude-sonnet-4-6 como cerebro de voz,
+Opus en el orquestador web) · FastAPI + WebSocket · Vosk (wake word es) ·
+faster-whisper · edge-tts · pvrecorder · three.js · Twilio (WhatsApp) ·
+PowerShell (vigilante/arranque con Windows).
 
-El sistema puede avisarte por WhatsApp (1) cuando necesita tu aprobacion y
-(2) cuando termina una tarea. Es opcional: sin credenciales, todo funciona
-igual pero sin enviar mensajes.
+## Estado
 
-**Alta (una vez):**
-1. Crea una cuenta gratis en [twilio.com](https://www.twilio.com/).
-2. En la consola: *Messaging -> Try it out -> Send a WhatsApp message*. Activa el sandbox.
-3. Desde tu WhatsApp, envia `join <codigo>` al numero del sandbox que te muestran.
-4. Copia tus credenciales en `.env` (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
-   `TWILIO_WHATSAPP_FROM`, `WHATSAPP_TO`).
-5. Reinicia el servidor.
+Proyecto personal en uso diario real. Construido de forma incremental con
+pruebas end-to-end en cada fase (la regla de la casa: no ampliar sin
+probar lo anterior).
 
-**Limitaciones honestas:**
-- El sandbox de Twilio caduca tras 3 dias de inactividad (reenvia el `join`).
-- Solo puede escribir a numeros que hayan hecho `join`.
-- WhatsApp solo permite mensajes libres dentro de las 24 h desde tu ultimo
-  mensaje; fuera de eso harian falta plantillas aprobadas por Meta.
-- Responder "si/no" *desde* WhatsApp para aprobar requeriria exponer un webhook
-  publico (p. ej. con un tunel ngrok). De momento apruebas en la web; el
-  WhatsApp solo te avisa.
+## Autor
 
-## Limitaciones / siguientes pasos
+Luis Durán Ibáñez — [@idbu32-2026](https://github.com/idbu32-2026)
 
-- El frontend es minimo (sin build, vanilla JS). Migrable a React si crece.
-- Una sola sesion concurrente por conexion WebSocket.
-- Los textos de subagentes individuales se ven a traves del orquestador; para
-  trazas por subagente se pueden activar hooks `SubagentStart/Stop`.
+*Desarrollado con Claude Code como copiloto de ingeniería.*
