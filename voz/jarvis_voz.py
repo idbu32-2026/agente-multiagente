@@ -135,6 +135,14 @@ REGLAS_PRECISION = (
     "maximo — lo esencial y ya. Nada de listas ni resumenes con puntos salvo "
     "que te los pidan. Si hay mucho que contar: da el titular y ofrece "
     "ampliar ('quieres que te cuente mas?').\n"
+    "AUTOMEJORA:\n"
+    "- Si el usuario te corrige un error TUYO, te repite una orden porque la "
+    "hiciste mal, o detectas que algo de tu propio sistema funciona mal, "
+    "termina tu respuesta con una linea aparte que empiece EXACTAMENTE por "
+    "'LECCION: ' seguida de una frase con que fallo y que deberia cambiar. "
+    "Esa linea no se dice en voz alta: va a tu archivo de automejora, que un "
+    "ingeniero revisa con el usuario. No la uses para nada mas, y no la "
+    "menciones en la conversacion.\n"
 )
 
 # Persona de JARVIS (modo por defecto): el asistente personal de Luis, con
@@ -336,6 +344,37 @@ def _prompt_memoria() -> str:
 
 
 # ===========================================================================
+#  AUTOMEJORA CON GATE HUMANO (pedida por Luis, 2026-06-12).
+#  JARVIS apunta sus fallos y las correcciones de Luis en un archivo de
+#  lecciones (solo ANADIR, nunca borrar). El NO se auto-modifica: Luis le
+#  dice a Claude Code "revisa las lecciones de Jarvis", Claude propone las
+#  mejoras concretas y Luis las aprueba antes de tocar codigo (gate humano).
+# ===========================================================================
+LECCIONES_PATH = PROJECT_DIR / "voz" / "lecciones_jarvis.md"
+
+
+def _apuntar_leccion(tipo: str, detalle: str) -> None:
+    """Apunta una leccion de automejora (solo anade; el archivo nunca se borra)."""
+    try:
+        nuevo = not LECCIONES_PATH.exists()
+        with open(LECCIONES_PATH, "a", encoding="utf-8") as f:
+            if nuevo:
+                f.write(
+                    "# Lecciones de JARVIS — automejora con gate humano\n"
+                    "# Fallos y correcciones apuntados en vivo. Para convertirlos\n"
+                    "# en mejoras: decir a Claude Code 'revisa las lecciones de\n"
+                    "# Jarvis'. NUNCA borrar lineas: una leccion resuelta se marca\n"
+                    "# anadiendo debajo una linea 'TRATADA [fecha]: que se hizo'.\n\n"
+                )
+            marca = time.strftime("%Y-%m-%d %H:%M")
+            detalle = " ".join(detalle.split())[:300]
+            f.write(f"[{marca}] {tipo}: {detalle}\n")
+        print(f"[leccion] {tipo}: {detalle[:80]}", flush=True)
+    except OSError as e:
+        print(f"[leccion] No se pudo apuntar: {e}", flush=True)
+
+
+# ===========================================================================
 #  CEREBRO: sesion PERSISTENTE con el Claude Agent SDK (memoria + sin arranque
 #  en frio). Mismo patron que backend/main.py usa en produccion.
 # ===========================================================================
@@ -401,6 +440,12 @@ class Cerebro:
             if partes:
                 respuesta = " ".join(partes)
         final = (respuesta or f"Ahora mismo no puedo responder, {USER_NAME}.").strip()
+        # AUTOMEJORA: si el cerebro marco una leccion ('LECCION: ...' al final,
+        # tambien acepta la tilde), se aparta al archivo y NO se dice en voz alta.
+        partes_leccion = re.split(r"LECCI[OÓ]N:\s*", final, maxsplit=1)
+        if len(partes_leccion) == 2 and not self._ninos:
+            final = partes_leccion[0].strip() or f"Apuntado, {USER_NAME}."
+            _apuntar_leccion("CORRECCION", partes_leccion[1].strip())
         # El modo ninos NO guarda memoria: las charlas de un nino no se
         # registran en archivo (privacidad; decision deliberada).
         if not self._ninos:
@@ -1047,17 +1092,12 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             voz.decir("¿Sí?")
             _drenar_microfono(recorder)          # anti-eco: descarta el "¿Sí?"
             audio = _grabar_mandato(recorder)
-            if audio:
-                # Bip corto = "te he oido, estoy en ello": elimina la sensacion
-                # de silencio muerto mientras Whisper transcribe (~3-6s).
-                try:
-                    import winsound
-                    winsound.Beep(740, 120)
-                except Exception:
-                    pass
+            # (Hubo un bip aqui como "te he oido"; Luis pidio quitarlo 12-jun.)
             texto = _transcribir(whisper, audio)
             if not texto:
                 voz.decir(f"No te he entendido, {USER_NAME}.")
+                _apuntar_leccion("OIDO", "capte audio tras la palabra clave "
+                                 "pero no entendi nada (ruido o transcripcion)")
                 _escribir_estado("esperando")
                 continue
             print(f"{USER_NAME}> {texto}")
@@ -1068,6 +1108,13 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
                 break
             if _es_orden(texto_cmd, FRASES_HUD):
                 _abrir_hud(voz)
+                _escribir_estado("esperando", texto)
+                continue
+            # "Apunta una leccion: ..." -> directo al archivo de automejora,
+            # sin pasar por el cerebro (es una orden, no una pregunta).
+            if texto_cmd.startswith("apunta") and "leccion" in texto_cmd:
+                _apuntar_leccion(f"ORDEN DE {USER_NAME.upper()}", texto)
+                voz.decir(f"Apuntado, {USER_NAME}. Lo revisaremos para mejorarme.")
                 _escribir_estado("esperando", texto)
                 continue
             _escribir_estado("pensando", texto)
@@ -1106,15 +1153,20 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
                     loop.run_until_complete(tarea)
                 except Exception:
                     pass
+                _apuntar_leccion("CEREBRO", f"colgado mas de 180s con: {texto}")
                 _reconectar_cerebro("Me he atascado pensando, perdona. Reinicio mi cerebro.")
                 _escribir_estado("esperando")
                 continue
             except Exception as e:
                 print(f"[cerebro] Error en el turno: {e}", flush=True)
+                _apuntar_leccion("CEREBRO", f"error de conexion ({e}) con: {texto}")
                 _reconectar_cerebro("He perdido la conexion con mi cerebro. Dame un momento, lo reinicio.")
                 _escribir_estado("esperando")
                 continue
-            print(f"[cerebro] Respondio en {time.time() - t_pensando:.1f}s", flush=True)
+            t_respuesta = time.time() - t_pensando
+            print(f"[cerebro] Respondio en {t_respuesta:.1f}s", flush=True)
+            if t_respuesta > 45:
+                _apuntar_leccion("LENTO", f"{t_respuesta:.0f}s en responder a: {texto}")
             _escribir_estado("hablando", texto, respuesta)
             voz.decir(respuesta)
             _drenar_microfono(recorder)  # anti-eco: que no se oiga a si mismo

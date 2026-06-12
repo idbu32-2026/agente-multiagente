@@ -21,6 +21,8 @@ hud/estado.json
 voz/memoria_charlas.md
 voz/ultima_grabacion.wav
 voz/cache_voz/
+# - lecciones_jarvis.md: fallos y correcciones apuntados en vivo (automejora)
+voz/lecciones_jarvis.md
 
 # Modelos descargados (40+ MB; el instalador los baja, no van al historial)
 voz/modelos/
