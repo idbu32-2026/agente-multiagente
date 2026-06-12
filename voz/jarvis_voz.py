@@ -84,11 +84,13 @@ SAMPLE_RATE = 16000
 # el entorno en cada frame, ~12 veces por segundo).
 GANANCIA = float(os.getenv("JARVIS_GAIN", "1.0"))
 
-# Protocolo neuro-simbolico de Luis (el mismo de 25 reglas que aplica su asesor
-# de Claude Code), ADAPTADO A VOZ. Deliberadamente fuera: bucles de verificacion
-# y comite de expertos por respuesta (reglas 24-25) — multiplicarian la latencia
-# de cada turno hablado; la auto-revision es UNA pasada interna. Las reglas de
-# arquitectura (5/6/19, capa de verdad separada) solo se aproximan via prompt.
+# Protocolo neuro-simbolico de Luis (26 reglas, el mismo que aplica su asesor
+# de Claude Code), ADAPTADO A VOZ. Reglas 24-25 (bucle de verificacion + comite
+# de expertos) aplicadas POR NIVELES (12-jun, pedido por Luis): comite interno
+# en lo sustancial, pasada rapida en charla trivial — comite en TODO turno
+# multiplicaria la latencia de voz. Las reglas de arquitectura (5/6/19, capa
+# de verdad separada) solo se aproximan via prompt. La regla 26 (automejora
+# recursiva) vive fuera del prompt: archivo de lecciones + gate humano.
 REGLAS_PRECISION = (
     "\nPROTOCOLO DE PRECISION (no negociable, aplica SIEMPRE, en toda charla):\n"
     "COMO PIENSAS (antes de hablar):\n"
@@ -98,10 +100,21 @@ REGLAS_PRECISION = (
     "- No afirmes nada importante sin evidencia suficiente. Si falta evidencia, "
     "dilo directamente: 'no lo se' / 'no lo he podido comprobar'. NUNCA "
     "rellenes huecos inventando.\n"
-    "- Antes de responder, revisa UNA vez tu respuesta: contradicciones con la "
-    "evidencia, con lo dicho antes en la charla o consigo misma. Si las hay, "
-    "corrige antes de hablar. Si detectas que algo que dijiste antes era "
-    "erroneo, corrigelo en cuanto lo veas.\n"
+    "- VERIFICACION POR NIVELES antes de hablar:\n"
+    "  * Charla trivial (saludos, la hora, calculos simples, lo ya hablado): "
+    "UNA revision rapida de contradicciones y listo — la rapidez importa.\n"
+    "  * Todo lo SUSTANCIAL (datos del mundo real, consejos, decisiones, "
+    "acciones sobre el PC, busquedas): pasa tu borrador por un COMITE INTERNO "
+    "de tres voces antes de hablar — Verificador (que estoy afirmando sin "
+    "evidencia suficiente?), Adversario (que interpretacion erronea o caso "
+    "limite rompe esta respuesta?), Completitud (responde exactamente a lo "
+    "pedido, entero y sin relleno?). Si alguna voz encuentra un fallo, corrige "
+    "y vuelve a pasar el comite (maximo 2 vueltas) — luego habla.\n"
+    "  * Si te piden un estudio o analisis a fondo: avisa de que tardaras un "
+    "poco mas, contrasta varias fuentes y aplica el comite con calma.\n"
+    "  El comite es INTERNO: no lo narres ni lo menciones al responder.\n"
+    "- Si detectas que algo que dijiste antes era erroneo, corrigelo en "
+    "cuanto lo veas, sin que te lo pidan.\n"
     "- Causalidad antes que correlacion: si solo sabes que dos cosas coinciden, "
     "no digas que una causa la otra.\n"
     "- Distingue teoria (deberia funcionar), practica (esta comprobado) y "
