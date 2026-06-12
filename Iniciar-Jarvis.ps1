@@ -1,4 +1,6 @@
-# JARVIS - arranca el asistente de voz (modo charla con busqueda web).
+# JARVIS - arranca el asistente de voz en modo ACTUAR (charla, busca en la
+# web Y ejecuta ordenes por voz sobre el PC, pidiendo permiso por voz antes
+# de acciones sensibles; borrar esta prohibido por codigo).
 # Se lanza desde el acceso directo "JARVIS" del escritorio (los .bat no se
 # ejecutan por doble clic en este PC; PowerShell si).
 # MIC_INDEX y JARVIS_GAIN se leen del .env del proyecto.
@@ -9,7 +11,7 @@
 
 $proyecto = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $proyecto
-$host.UI.RawUI.WindowTitle = "JARVIS (di 'Hey Jarvis' - Ctrl+C para salir)"
+$host.UI.RawUI.WindowTitle = "JARVIS (di 'Jarvis' - Ctrl+C para salir)"
 
 New-Item -ItemType Directory -Force "$proyecto\logs" | Out-Null
 $registroCaidas = "$proyecto\logs\jarvis-caidas.log"
@@ -17,7 +19,7 @@ $caidas = 0
 
 while ($true) {
     $inicio = Get-Date
-    & "$proyecto\.venv\Scripts\python.exe" "$proyecto\voz\jarvis_voz.py"
+    & "$proyecto\.venv\Scripts\python.exe" "$proyecto\voz\jarvis_voz.py" --actuar
     if ($LASTEXITCODE -eq 0) { break }   # salida normal: no reiniciar
 
     # Si Jarvis corrio un buen rato antes de cerrarse, NO es un bucle de

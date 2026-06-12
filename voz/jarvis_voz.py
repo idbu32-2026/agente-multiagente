@@ -785,10 +785,13 @@ class _SilencioJuego:
     """Modo silencio automatico: si alguien juega en el PC, JARVIS calla.
 
     Pedido por Luis (2026-06-12): el PC es compartido con su hijo; con un
-    juego en marcha JARVIS no debe despertarse ni hablar (el audio del juego
-    ademas le daba falsos despertares). Se comprueba cada ~5s; al entrar y
-    salir del silencio NO habla (seria molestar), solo lo anota en el log y
-    en el HUD. Desactivable con JARVIS_SILENCIO_JUEGO=0 en .env.
+    juego en marcha JARVIS no habla ni salta solo. Matiz (mismo dia): la
+    palabra clave SI debe despertarlo durante el juego — silencio significa
+    "no molestes", no "desconectado del todo". Con Vosk/Porcupine es seguro
+    (solo disparan con la palabra literal); con openWakeWord NO se permite
+    (el audio del juego le daba falsos despertares). Se comprueba cada ~5s;
+    al entrar y salir del silencio no habla (seria molestar), solo lo anota
+    en el log y en el HUD. Desactivable con JARVIS_SILENCIO_JUEGO=0 en .env.
     """
 
     def __init__(self, frame_length: int) -> None:
@@ -807,7 +810,8 @@ class _SilencioJuego:
             motivo = _juego_activo()
             if motivo and not self.activo:
                 self.activo = True
-                print(f"[silencio] {motivo}: JARVIS calla hasta que termine.", flush=True)
+                print(f"[silencio] {motivo}: JARVIS calla "
+                      "(decir 'Jarvis' lo despierta igualmente).", flush=True)
                 _escribir_estado("silencio")
             elif not motivo and self.activo:
                 self.activo = False
@@ -821,8 +825,10 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
 
     Porcupine: process() devuelve >= 0 en el frame donde reconoce 'jarvis'.
     openWakeWord: confianza 0..1 por frame; dispara al superar WAKE_UMBRAL.
-    Con un juego en marcha (modo silencio) el micro se sigue drenando pero no
-    se detecta nada: JARVIS ni se despierta ni habla.
+    Con un juego en marcha (modo silencio), Vosk y Porcupine SIGUEN atentos a
+    la palabra clave: decir 'Jarvis' lo despierta tambien durante la partida
+    (al acabar el turno vuelve solo al silencio). openWakeWord en cambio queda
+    sordo durante el juego: el audio del juego le provocaba falsos despertares.
     Lanza KeyboardInterrupt hacia arriba si el usuario pulsa Ctrl+C.
     """
     import numpy as np
@@ -835,12 +841,7 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
         # (asi escribe Vosk la pronunciacion espanola; verificado con audio real).
         while True:
             frame = _leer_amplificado(recorder)
-            if silencio.chequear():
-                reanudar = True
-                continue
-            if reanudar:
-                motor.Reset()
-                reanudar = False
+            callado = silencio.chequear()
             datos = np.array(frame, dtype=np.int16).tobytes()
             if motor.AcceptWaveform(datos):
                 texto = json.loads(motor.Result()).get("text", "")
@@ -848,14 +849,19 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
                 texto = json.loads(motor.PartialResult()).get("partial", "")
             if "jarvis" in texto:
                 motor.Reset()  # que el proximo turno empiece de cero
+                if callado:
+                    print("[silencio] Palabra clave durante el juego: "
+                          "JARVIS despierta para este turno.", flush=True)
                 return True
 
     if motor_nombre == "porcupine":
         while True:
             frame = _leer_amplificado(recorder)
-            if silencio.chequear():
-                continue
+            callado = silencio.chequear()
             if motor.process(frame) >= 0:
+                if callado:
+                    print("[silencio] Palabra clave durante el juego: "
+                          "JARVIS despierta para este turno.", flush=True)
                 return True
 
     motor.reset()  # limpia el buffer interno para no arrastrar audio viejo
