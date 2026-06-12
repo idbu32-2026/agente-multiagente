@@ -135,6 +135,15 @@ REGLAS_PRECISION = (
     "maximo — lo esencial y ya. Nada de listas ni resumenes con puntos salvo "
     "que te los pidan. Si hay mucho que contar: da el titular y ofrece "
     "ampliar ('quieres que te cuente mas?').\n"
+    "LO QUE NO TIENES (no lo finjas jamas):\n"
+    "- Eres SOLO voz: no existe ningun cuadro de texto, recuadro ni pantalla "
+    "donde el usuario te escriba. Nunca le digas que te escriba.\n"
+    "- NO puedes ejecutar comandos de barra diagonal (/evoluciona, "
+    "/lecciones-jarvis, etc.): esos comandos son de Claude Code, OTRA "
+    "herramienta del PC. Si el usuario los necesita, dile que abra Claude "
+    "Code y se los pida alli; tu NO los lanzas ni por dentro ni por fuera.\n"
+    "- Si te piden algo fuera de tus capacidades reales, di claramente 'eso "
+    "no puedo hacerlo' y, si la sabes, ofrece la alternativa real.\n"
     "AUTOMEJORA:\n"
     "- Si el usuario te corrige un error TUYO, te repite una orden porque la "
     "hiciste mal, o detectas que algo de tu propio sistema funciona mal, "
@@ -865,6 +874,49 @@ class _SilencioJuego:
         return self.activo
 
 
+class _MicroMuerto(Exception):
+    """El microfono lleva demasiado entregando silencio absoluto: reiniciar."""
+
+
+class _VigiaOido:
+    """Detector de microfono muerto (leccion de la sordera del 12-jun).
+
+    Un flujo de audio degradado entrega ceros SIN dar error: Jarvis se queda
+    sordo y nadie lo nota (paso de 15:00 a 15:08 y hubo que reiniciar a mano).
+    Cada ~30s de escucha se mira el nivel medio del audio; DOS ventanas
+    seguidas practicamente a cero = micro muerto -> _MicroMuerto, y el bucle
+    principal avisa por voz y sale con codigo 3 para que el vigilante lo
+    relance con el audio reabierto. El ambiente real de este micro ronda
+    13-53; un flujo muerto da ~0. Umbral en JARVIS_OIDO_MIN (defecto 2).
+    """
+
+    def __init__(self, frame_length: int) -> None:
+        self._cada = max(1, int(30 * SAMPLE_RATE / frame_length))  # ~30s
+        self._minimo = float(os.getenv("JARVIS_OIDO_MIN", "2"))
+        self._suma = 0.0
+        self._frames = 0
+        self._muertas = 0
+
+    def chequear(self, frame) -> None:
+        import numpy as np
+
+        self._suma += float(np.abs(np.asarray(frame, dtype=np.int32)).mean())
+        self._frames += 1
+        if self._frames < self._cada:
+            return
+        nivel = self._suma / self._frames
+        self._suma = 0.0
+        self._frames = 0
+        if nivel >= self._minimo:
+            self._muertas = 0
+            return
+        self._muertas += 1
+        print(f"[oido] 30s con nivel medio {nivel:.2f} — micro sospechoso "
+              f"({self._muertas}/2).", flush=True)
+        if self._muertas >= 2:
+            raise _MicroMuerto(f"nivel medio {nivel:.2f} durante un minuto")
+
+
 def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
     """Bloquea hasta oir la palabra clave. Devuelve True al detectarla.
 
@@ -879,6 +931,7 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
     import numpy as np
 
     silencio = _SilencioJuego(recorder.frame_length)
+    oido = _VigiaOido(recorder.frame_length)
     reanudar = False  # tras el silencio, limpiar el motor (no arrastrar juego)
 
     if motor_nombre == "vosk":
@@ -886,6 +939,7 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
         # (asi escribe Vosk la pronunciacion espanola; verificado con audio real).
         while True:
             frame = _leer_amplificado(recorder)
+            oido.chequear(frame)
             callado = silencio.chequear()
             datos = np.array(frame, dtype=np.int16).tobytes()
             if motor.AcceptWaveform(datos):
@@ -902,6 +956,7 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
     if motor_nombre == "porcupine":
         while True:
             frame = _leer_amplificado(recorder)
+            oido.chequear(frame)
             callado = silencio.chequear()
             if motor.process(frame) >= 0:
                 if callado:
@@ -912,6 +967,7 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
     motor.reset()  # limpia el buffer interno para no arrastrar audio viejo
     while True:
         frame = _leer_amplificado(recorder)
+        oido.chequear(frame)
         if silencio.chequear():
             reanudar = True
             continue
@@ -1183,6 +1239,16 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             _escribir_estado("esperando", texto, respuesta)
     except KeyboardInterrupt:
         print("\n[voz] Cerrando JARVIS...")
+    except _MicroMuerto as e:
+        # Sordera silenciosa (leccion 12-jun): avisar y salir con codigo != 0
+        # para que el vigilante relance a JARVIS con el audio reabierto.
+        print(f"[oido] MICRO MUERTO ({e}). Salgo para que el vigilante "
+              "me relance con el audio reabierto.", flush=True)
+        _apuntar_leccion("SORDERA", f"micro muerto ({e}); me reinicie solo "
+                         "via vigilante para reabrir el audio")
+        voz.decir(f"{USER_NAME}, llevo un minuto sin captar nada por el "
+                  "microfono. Me reinicio para arreglarlo.")
+        sys.exit(3)
     finally:
         _escribir_estado("apagado")  # el HUD muestra DESCONECTADO, no "en linea"
         recorder.stop()
