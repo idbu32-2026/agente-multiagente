@@ -584,13 +584,15 @@ def _leer_amplificado(recorder):
     return amplificado.astype(np.int16).tolist()
 
 
-def _drenar_microfono(recorder, frames: int = 12) -> None:
-    """Descarta el audio acumulado mientras JARVIS hablaba (anti-eco).
+def _drenar_microfono(recorder, segundos: float = 1.0) -> None:
+    """Descarta ~1 s del audio acumulado mientras JARVIS hablaba (anti-eco).
 
-    pyttsx3 reproduce por los altavoces mientras el PvRecorder sigue
-    buffereando; sin esto, Whisper transcribiria la propia voz de JARVIS
-    mezclada con la tuya. Tiramos unos frames antes de empezar a grabar.
+    El altavoz suena mientras el PvRecorder sigue buffereando; sin esto,
+    Whisper transcribiria la propia voz de JARVIS mezclada con la tuya.
+    Se calcula en TIEMPO, no en frames: el tamano de frame depende del
+    detector (Porcupine 512, openWakeWord 1280).
     """
+    frames = max(1, int(segundos * SAMPLE_RATE / recorder.frame_length))
     for _ in range(frames):
         recorder.read()
 
@@ -653,9 +655,17 @@ def _elegir_microfono() -> int:
 
 
 def _nivel_microfono(recorder, frames: int = 15) -> float:
-    """Nivel medio (RMS) de ~1 s de microfono. ~0 = micro mudo o mal elegido."""
+    """Nivel medio (RMS) de ~1 s de microfono. ~0 = micro mudo o mal elegido.
+
+    Desecha el primer medio segundo: justo tras recorder.start() el flujo
+    llega vacio y daba falsas alarmas de "micro mudo" (visto 2 veces el 11-12
+    de junio con el micro funcionando perfectamente).
+    """
     import numpy as np
 
+    calentamiento = max(1, int(0.5 * SAMPLE_RATE / recorder.frame_length))
+    for _ in range(calentamiento):
+        recorder.read()
     total = 0.0
     for _ in range(frames):
         frame = np.array(_leer_amplificado(recorder), dtype="float32")
@@ -663,19 +673,72 @@ def _nivel_microfono(recorder, frames: int = 15) -> float:
     return total / frames
 
 
-def _esperar_palabra_clave(recorder, oww) -> bool:
-    """Bloquea hasta oir 'Hey Jarvis'. Devuelve True al detectarla.
+def _motor_wake():
+    """Elige el detector de palabra clave: (nombre, motor, frame_length, palabra).
 
-    Usa openWakeWord: por cada frame de audio calcula una confianza 0..1 para el
-    modelo y dispara al superar WAKE_UMBRAL. Lanza KeyboardInterrupt hacia arriba
-    si el usuario pulsa Ctrl+C.
+    Historia (2026-06-11/12): el modelo openWakeWord 'hey_jarvis' esta entrenado
+    con voces inglesas y puntuaba la pronunciacion espanola natural de Luis
+    ("ey yarbis") a 0.16 sobre un umbral de 0.38 — sordo para el, mientras el
+    audio de un juego puntuaba 0.32+. Porcupine (que traia 'jarvis' de fabrica)
+    retiro su plan gratuito en 2026. Solucion: VOSK, un reconocedor de espanol
+    local que transcribe el 'jarvis' espanol de Luis como "jarvis" (verificado
+    con su grabacion real, 3/3). Orden: lo que fuerce JARVIS_WAKE_MOTOR; si no,
+    Vosk si su modelo esta descargado; Porcupine si hay clave; openWakeWord.
+    """
+    eleccion = (os.getenv("JARVIS_WAKE_MOTOR") or "").strip().lower()
+    ruta_vosk = Path(__file__).resolve().parent / "modelos" / "vosk-model-small-es-0.42"
+    clave = (os.getenv("PICOVOICE_ACCESS_KEY") or "").strip()
+
+    if eleccion in ("", "vosk") and ruta_vosk.is_dir():
+        from vosk import KaldiRecognizer, Model, SetLogLevel
+
+        SetLogLevel(-1)  # sin ruido de logs internos
+        motor = KaldiRecognizer(Model(str(ruta_vosk)), SAMPLE_RATE)
+        print("[voz] Detector: Vosk espanol — di 'Jarvis' (local, sin cuentas)")
+        return "vosk", motor, FRAME_LENGTH, "Jarvis"
+    if eleccion in ("", "porcupine") and clave:
+        import pvporcupine
+
+        sens = float(os.getenv("JARVIS_PORCUPINE_SENS", "0.6"))
+        motor = pvporcupine.create(access_key=clave, keywords=["jarvis"],
+                                   sensitivities=[sens])
+        print(f"[voz] Detector: Porcupine, palabra 'jarvis' (sensibilidad {sens})")
+        return "porcupine", motor, motor.frame_length, "Jarvis"
+    print("[voz] Detector: openWakeWord 'hey_jarvis' (fragil con acento espanol).")
+    return "oww", _cargar_wakeword(), FRAME_LENGTH, "Hey Jarvis"
+
+
+def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
+    """Bloquea hasta oir la palabra clave. Devuelve True al detectarla.
+
+    Porcupine: process() devuelve >= 0 en el frame donde reconoce 'jarvis'.
+    openWakeWord: confianza 0..1 por frame; dispara al superar WAKE_UMBRAL.
+    Lanza KeyboardInterrupt hacia arriba si el usuario pulsa Ctrl+C.
     """
     import numpy as np
 
-    oww.reset()  # limpia el buffer interno para no arrastrar audio viejo
+    if motor_nombre == "vosk":
+        # Reconocedor espanol continuo: dispara si en lo dicho aparece "jarvis"
+        # (asi escribe Vosk la pronunciacion espanola; verificado con audio real).
+        while True:
+            datos = np.array(_leer_amplificado(recorder), dtype=np.int16).tobytes()
+            if motor.AcceptWaveform(datos):
+                texto = json.loads(motor.Result()).get("text", "")
+            else:
+                texto = json.loads(motor.PartialResult()).get("partial", "")
+            if "jarvis" in texto:
+                motor.Reset()  # que el proximo turno empiece de cero
+                return True
+
+    if motor_nombre == "porcupine":
+        while True:
+            if motor.process(_leer_amplificado(recorder)) >= 0:
+                return True
+
+    motor.reset()  # limpia el buffer interno para no arrastrar audio viejo
     while True:
         frame = np.array(_leer_amplificado(recorder), dtype=np.int16)
-        puntuaciones = oww.predict(frame)
+        puntuaciones = motor.predict(frame)
         if puntuaciones.get(WAKE_MODEL, 0.0) >= WAKE_UMBRAL:
             return True
 
@@ -778,12 +841,13 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
         return  # salida normal (codigo 0): el watchdog tampoco lo reintenta
 
     whisper = _cargar_whisper()
-    oww = _cargar_wakeword()  # openWakeWord: local, sin clave ni cuenta
+    motor_nombre, motor, frame_len, palabra = _motor_wake()
     _arrancar_servidor_hud()  # HUD en vivo (di "muestrate" para abrirlo)
     _escribir_estado("esperando")
 
+    # El tamano de frame lo dicta el detector (Porcupine 512, openWakeWord 1280).
     recorder = PvRecorder(device_index=_elegir_microfono(),
-                          frame_length=FRAME_LENGTH)
+                          frame_length=frame_len)
 
     # Un unico event loop para toda la sesion: lo necesita el cerebro persistente.
     loop = asyncio.new_event_loop()
@@ -822,7 +886,7 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
         modo = "CHARLA (conversa y busca en la web)"
     print("\n========================================")
     print(f"  {nombre.upper()} activo - modo {modo}.")
-    print("  Di 'Hey Jarvis' para despertarlo. (Ctrl+C para salir)")
+    print(f"  Di '{palabra}' para despertarlo. (Ctrl+C para salir)")
     print("========================================\n")
     # Chequeo de oido al arrancar: un micro virtual (Steam/Oculus) da silencio
     # absoluto y JARVIS quedaria sordo SIN ningun error. Mejor avisar por voz.
@@ -835,8 +899,8 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
 
     try:
         while True:
-            _esperar_palabra_clave(recorder, oww)
-            # Detectada la palabra "Hey Jarvis".
+            _esperar_palabra_clave(recorder, motor_nombre, motor)
+            # Detectada la palabra clave.
             print("[voz] Te escucho...")
             _escribir_estado("escuchando")
             voz.decir("¿Sí?")
@@ -903,6 +967,11 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
         _escribir_estado("apagado")  # el HUD muestra DESCONECTADO, no "en linea"
         recorder.stop()
         recorder.delete()
+        if motor_nombre == "porcupine":
+            try:
+                motor.delete()  # libera el detector nativo
+            except Exception:
+                pass
         loop.run_until_complete(cerebro.cerrar())
         loop.close()
         try:
