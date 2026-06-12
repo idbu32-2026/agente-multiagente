@@ -39,8 +39,14 @@ def _reproducir_mp3(ruta: str) -> None:
         mci(f"close {alias}", None, 0, None)
 
 
-def _decir_neural(texto: str) -> None:
-    """Voz Alvaro (edge-tts). Sintetiza (o coge del cache) y reproduce."""
+def _decir_neural(texto: str, reproducir: bool = True) -> None:
+    """Voz Alvaro (edge-tts). Sintetiza (o coge del cache) y, si toca, reproduce.
+
+    Con reproducir=False solo fabrica el mp3 (modo 'solo'): lo usa la tuberia
+    de frases de Voz.decir para pre-sintetizar las frases siguientes EN
+    PARALELO mientras suena la primera. La escritura es atomica (tmp +
+    os.replace) para que un pre-sintetizador y un reproductor no se pisen.
+    """
     CACHE_DIR.mkdir(exist_ok=True)
     clave = hashlib.md5(f"{VOZ_NEURAL}|{texto}".encode("utf-8")).hexdigest()
     mp3 = CACHE_DIR / f"{clave}.mp3"
@@ -49,8 +55,11 @@ def _decir_neural(texto: str) -> None:
 
         import edge_tts
 
-        asyncio.run(edge_tts.Communicate(texto, VOZ_NEURAL).save(str(mp3)))
-    _reproducir_mp3(str(mp3))
+        tmp = CACHE_DIR / f"{clave}.{os.getpid()}.tmp"
+        asyncio.run(edge_tts.Communicate(texto, VOZ_NEURAL).save(str(tmp)))
+        os.replace(tmp, mp3)
+    if reproducir:
+        _reproducir_mp3(str(mp3))
 
 
 def _decir_robotico(texto: str, rate: int, voice_id: str) -> None:
@@ -68,6 +77,7 @@ def _decir_robotico(texto: str, rate: int, voice_id: str) -> None:
 def main() -> None:
     rate = int(sys.argv[1]) if len(sys.argv) > 1 else 185
     voice_id = sys.argv[2] if len(sys.argv) > 2 else ""
+    solo_sintetizar = len(sys.argv) > 3 and sys.argv[3] == "solo"
 
     # El texto llega por stdin en UTF-8 (asi no se rompen acentos ni signos).
     texto = sys.stdin.buffer.read().decode("utf-8", "replace").strip()
@@ -75,8 +85,10 @@ def main() -> None:
         return
 
     try:
-        _decir_neural(texto)
+        _decir_neural(texto, reproducir=not solo_sintetizar)
     except Exception as e:
+        if solo_sintetizar:
+            return  # el reproductor lo reintentara o caera al respaldo el solo
         print(f"[tts] Voz neural no disponible ({e}); uso la de respaldo.", file=sys.stderr)
         _decir_robotico(texto, rate, voice_id)
 

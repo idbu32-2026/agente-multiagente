@@ -122,13 +122,19 @@ REGLAS_PRECISION = (
     "- Trazabilidad: di de donde sale el dato cuando importe (que web, que "
     "archivo).\n"
     "COMO HABLAS:\n"
-    "- Marca la confianza con palabras: 'seguro', 'creo que', 'es posible', "
-    "'no lo se'. A mas incertidumbre, menos rotundidad.\n"
+    "- DIRECTO: el dato pedido va en la PRIMERA frase, sin preambulos ni "
+    "rodeos ('depende...', 'hay varias opciones...'). Si la pregunta admite "
+    "varias respuestas, da LA mas probable primero y matiza despues en una "
+    "frase. Ambiguedad sin compromiso = mala respuesta.\n"
+    "- Marca la confianza con UNA palabra ('seguro', 'creo', 'no lo se'), no "
+    "con un parrafo de cautelas. A mas incertidumbre, menos rotundidad.\n"
     "- Si te corrigen con razon, reconocelo y corrige sin excusas. Si crees que "
     "el usuario se equivoca, diselo con respeto y explica por que; no le des "
     "la razon por sistema.\n"
-    "- Respuestas CORTAS: es voz. La respuesta corta y exacta gana a la larga; "
-    "no alargues ni expliques mas si no te lo piden.\n"
+    "- Respuestas CORTAS: es voz, no un informe. Por defecto 2-3 frases como "
+    "maximo — lo esencial y ya. Nada de listas ni resumenes con puntos salvo "
+    "que te los pidan. Si hay mucho que contar: da el titular y ofrece "
+    "ampliar ('quieres que te cuente mas?').\n"
 )
 
 # Persona de JARVIS (modo por defecto): el asistente personal de Luis, con
@@ -519,19 +525,43 @@ class Voz:
             pass
         return ""
 
+    def _trocear_frases(self, texto: str) -> list[str]:
+        """Divide en trozos de frase (~60+ caracteres) para la tuberia de voz."""
+        partes = re.split(r"(?<=[.!?…:])\s+", texto)
+        trozos: list[str] = []
+        actual = ""
+        for p in partes:
+            actual = f"{actual} {p}".strip()
+            if len(actual) >= 60:
+                trozos.append(actual)
+                actual = ""
+        if actual:
+            trozos.append(actual)
+        return trozos
+
+    def _worker_run(self, texto: str, solo_sintetizar: bool = False) -> None:
+        args = [sys.executable, self._worker, str(self.rate), self.voice_id]
+        if solo_sintetizar:
+            args.append("solo")
+        subprocess.run(args, input=texto.encode("utf-8"),
+                       timeout=max(60, len(texto) // 8))
+
     def decir(self, texto: str) -> None:
         print(f"{self.nombre}> {texto}", flush=True)
         hablado = _texto_hablable(texto)
         if not hablado:
             return
         try:
-            # Timeout proporcional al texto: a ~12 caracteres/seg de habla, 60s
-            # fijos cortaban a mitad de frase cualquier respuesta larga.
-            subprocess.run(
-                [sys.executable, self._worker, str(self.rate), self.voice_id],
-                input=hablado.encode("utf-8"),
-                timeout=max(60, len(hablado) // 8),
-            )
+            # TUBERIA DE FRASES: en respuestas largas, empieza a HABLAR la
+            # primera frase mientras las siguientes se sintetizan en paralelo
+            # (quedan en el cache; al llegarles el turno suenan al instante).
+            # Antes se sintetizaba el texto entero antes de abrir la boca.
+            frases = self._trocear_frases(hablado) if len(hablado) > 160 else [hablado]
+            for frase in frases[1:]:
+                threading.Thread(target=self._worker_run, args=(frase, True),
+                                 daemon=True).start()
+            for frase in frases:
+                self._worker_run(frase)
         except Exception as e:  # si el TTS falla, JARVIS ya respondio por texto
             print(f"[voz] No se pudo reproducir la voz: {e}", flush=True)
 
@@ -543,7 +573,10 @@ def _cargar_whisper():
     from faster_whisper import WhisperModel
     tamano = os.getenv("WHISPER_MODEL", "small")  # tiny/base/small/medium
     print(f"[voz] Cargando modelo de voz->texto '{tamano}' (la 1a vez se descarga)...")
-    return WhisperModel(tamano, device="cpu", compute_type="int8")
+    # Todos los nucleos disponibles: la transcripcion era el grueso de los
+    # ~6s de silencio entre que el usuario calla y JARVIS reacciona.
+    return WhisperModel(tamano, device="cpu", compute_type="int8",
+                        cpu_threads=max(4, os.cpu_count() or 4))
 
 
 def _cargar_wakeword():
@@ -602,7 +635,8 @@ def _grabar_mandato(recorder):
     import numpy as np
     umbral = int(os.getenv("JARVIS_SILENCIO", "350"))   # nivel de silencio (RMS)
     max_seg = 8.0
-    silencio_fin = 1.1                                   # seg de silencio = fin
+    # 0.9s de silencio = fin de frase (era 1.1; cada decima cuenta en voz).
+    silencio_fin = float(os.getenv("JARVIS_SILENCIO_FIN", "0.9"))
     audio: list[int] = []
     inicio = time.time()
     hubo_voz = False
@@ -708,20 +742,106 @@ def _motor_wake():
     return "oww", _cargar_wakeword(), FRAME_LENGTH, "Hey Jarvis"
 
 
+def _juego_activo() -> str:
+    """Devuelve el motivo si hay un juego en marcha en el PC, o '' si no.
+
+    Dos senales baratas:
+      1) Steam mantiene en el registro el id del juego abierto (RunningAppID).
+      2) La ventana activa ocupa TODA la pantalla sin estar "maximizada"
+         (juegos y video a pantalla completa; una ventana maximizada normal
+         esta 'zoomed' y NO cuenta — si no, un navegador maximizado callaria
+         a JARVIS).
+    """
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
+            if winreg.QueryValueEx(k, "RunningAppID")[0]:
+                return "juego de Steam en marcha"
+    except OSError:
+        pass
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        u = ctypes.windll.user32
+        h = u.GetForegroundWindow()
+        if h and not u.IsZoomed(h):
+            clase = ctypes.create_unicode_buffer(64)
+            u.GetClassNameW(h, clase, 64)
+            if clase.value not in ("Progman", "WorkerW", "Shell_TrayWnd"):
+                r = ctypes.wintypes.RECT()
+                u.GetWindowRect(h, ctypes.byref(r))
+                if (r.left <= 0 and r.top <= 0
+                        and r.right >= u.GetSystemMetrics(0)
+                        and r.bottom >= u.GetSystemMetrics(1)):
+                    return "aplicacion a pantalla completa"
+    except Exception:
+        pass
+    return ""
+
+
+class _SilencioJuego:
+    """Modo silencio automatico: si alguien juega en el PC, JARVIS calla.
+
+    Pedido por Luis (2026-06-12): el PC es compartido con su hijo; con un
+    juego en marcha JARVIS no debe despertarse ni hablar (el audio del juego
+    ademas le daba falsos despertares). Se comprueba cada ~5s; al entrar y
+    salir del silencio NO habla (seria molestar), solo lo anota en el log y
+    en el HUD. Desactivable con JARVIS_SILENCIO_JUEGO=0 en .env.
+    """
+
+    def __init__(self, frame_length: int) -> None:
+        self.activo = False
+        self._frames = 0
+        self._cada = max(1, int(5 * SAMPLE_RATE / frame_length))  # ~5 segundos
+        self._on = (os.getenv("JARVIS_SILENCIO_JUEGO", "1").strip() != "0")
+
+    def chequear(self) -> bool:
+        """Llamar una vez por frame de audio. True = hay que callar."""
+        if not self._on:
+            return False
+        self._frames += 1
+        if self._frames >= self._cada:
+            self._frames = 0
+            motivo = _juego_activo()
+            if motivo and not self.activo:
+                self.activo = True
+                print(f"[silencio] {motivo}: JARVIS calla hasta que termine.", flush=True)
+                _escribir_estado("silencio")
+            elif not motivo and self.activo:
+                self.activo = False
+                print("[silencio] Fin del juego: JARVIS vuelve a escuchar.", flush=True)
+                _escribir_estado("esperando")
+        return self.activo
+
+
 def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
     """Bloquea hasta oir la palabra clave. Devuelve True al detectarla.
 
     Porcupine: process() devuelve >= 0 en el frame donde reconoce 'jarvis'.
     openWakeWord: confianza 0..1 por frame; dispara al superar WAKE_UMBRAL.
+    Con un juego en marcha (modo silencio) el micro se sigue drenando pero no
+    se detecta nada: JARVIS ni se despierta ni habla.
     Lanza KeyboardInterrupt hacia arriba si el usuario pulsa Ctrl+C.
     """
     import numpy as np
+
+    silencio = _SilencioJuego(recorder.frame_length)
+    reanudar = False  # tras el silencio, limpiar el motor (no arrastrar juego)
 
     if motor_nombre == "vosk":
         # Reconocedor espanol continuo: dispara si en lo dicho aparece "jarvis"
         # (asi escribe Vosk la pronunciacion espanola; verificado con audio real).
         while True:
-            datos = np.array(_leer_amplificado(recorder), dtype=np.int16).tobytes()
+            frame = _leer_amplificado(recorder)
+            if silencio.chequear():
+                reanudar = True
+                continue
+            if reanudar:
+                motor.Reset()
+                reanudar = False
+            datos = np.array(frame, dtype=np.int16).tobytes()
             if motor.AcceptWaveform(datos):
                 texto = json.loads(motor.Result()).get("text", "")
             else:
@@ -732,13 +852,23 @@ def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
 
     if motor_nombre == "porcupine":
         while True:
-            if motor.process(_leer_amplificado(recorder)) >= 0:
+            frame = _leer_amplificado(recorder)
+            if silencio.chequear():
+                continue
+            if motor.process(frame) >= 0:
                 return True
 
     motor.reset()  # limpia el buffer interno para no arrastrar audio viejo
     while True:
-        frame = np.array(_leer_amplificado(recorder), dtype=np.int16)
-        puntuaciones = motor.predict(frame)
+        frame = _leer_amplificado(recorder)
+        if silencio.chequear():
+            reanudar = True
+            continue
+        if reanudar:
+            motor.reset()
+            reanudar = False
+        arr = np.array(frame, dtype=np.int16)
+        puntuaciones = motor.predict(arr)
         if puntuaciones.get(WAKE_MODEL, 0.0) >= WAKE_UMBRAL:
             return True
 
@@ -891,6 +1021,11 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
     # Chequeo de oido al arrancar: un micro virtual (Steam/Oculus) da silencio
     # absoluto y JARVIS quedaria sordo SIN ningun error. Mejor avisar por voz.
     nivel = _nivel_microfono(recorder)
+    if nivel < 2:
+        # El flujo a veces tarda 1-2s en despertar tras reabrir el micro:
+        # segunda oportunidad antes de dar la falsa alarma (vista 3 veces).
+        time.sleep(1.5)
+        nivel = _nivel_microfono(recorder)
     print(f"[voz] Nivel de ruido ambiente del micro: {nivel:.0f}", flush=True)
     if nivel < 2:
         voz.decir(f"Aviso, {USER_NAME}: no me llega ningun sonido del microfono. "
@@ -906,6 +1041,14 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             voz.decir("¿Sí?")
             _drenar_microfono(recorder)          # anti-eco: descarta el "¿Sí?"
             audio = _grabar_mandato(recorder)
+            if audio:
+                # Bip corto = "te he oido, estoy en ello": elimina la sensacion
+                # de silencio muerto mientras Whisper transcribe (~3-6s).
+                try:
+                    import winsound
+                    winsound.Beep(740, 120)
+                except Exception:
+                    pass
             texto = _transcribir(whisper, audio)
             if not texto:
                 voz.decir(f"No te he entendido, {USER_NAME}.")
@@ -936,11 +1079,20 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             try:
                 try:
                     respuesta = loop.run_until_complete(
-                        asyncio.wait_for(asyncio.shield(tarea), timeout=8))
+                        asyncio.wait_for(asyncio.shield(tarea), timeout=5))
                 except asyncio.TimeoutError:
-                    voz.decir("Dame unos segundos, lo estoy mirando.")
+                    # Aviso EN PARALELO: antes voz.decir() congelaba el event
+                    # loop (el cerebro no avanzaba mientras JARVIS hablaba) y
+                    # sumaba ~3s a cada turno largo. En un hilo, el cerebro
+                    # sigue trabajando mientras suena el aviso.
+                    aviso = threading.Thread(
+                        target=voz.decir,
+                        args=("Dame unos segundos, lo estoy mirando.",),
+                        daemon=True)
+                    aviso.start()
                     respuesta = loop.run_until_complete(
                         asyncio.wait_for(tarea, timeout=180))
+                    aviso.join(timeout=10)  # no pisar el aviso con la respuesta
             except asyncio.TimeoutError:
                 print(f"[cerebro] COLGADO: sin respuesta tras {time.time() - t_pensando:.0f}s. Reconectando...", flush=True)
                 tarea.cancel()

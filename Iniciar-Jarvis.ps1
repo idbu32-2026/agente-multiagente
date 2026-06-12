@@ -16,13 +16,20 @@ $registroCaidas = "$proyecto\logs\jarvis-caidas.log"
 $caidas = 0
 
 while ($true) {
+    $inicio = Get-Date
     & "$proyecto\.venv\Scripts\python.exe" "$proyecto\voz\jarvis_voz.py"
     if ($LASTEXITCODE -eq 0) { break }   # salida normal: no reiniciar
+
+    # Si Jarvis corrio un buen rato antes de cerrarse, NO es un bucle de
+    # fallo: contador a cero. (Leccion 2026-06-12: los reinicios manuales
+    # durante mantenimiento gastaban los 5 intentos y el vigilante se
+    # rendia esperando una tecla en una ventana minimizada que nadie ve.)
+    if (((Get-Date) - $inicio).TotalSeconds -ge 120) { $caidas = 0 }
 
     $caidas++
     Add-Content $registroCaidas "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Jarvis se cerro con codigo $LASTEXITCODE (caida $caidas)."
     if ($caidas -ge 5) {
-        Read-Host "Jarvis ha fallado $caidas veces. Mira el error de arriba o logs\jarvis-caidas.log. Pulsa Enter para cerrar"
+        Add-Content $registroCaidas "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 5 caidas rapidas seguidas: el vigilante se rinde para no ciclar. Arranca a mano con JARVIS.lnk tras revisar el error."
         break
     }
     Write-Host ""

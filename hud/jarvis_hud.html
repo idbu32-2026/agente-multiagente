@@ -132,6 +132,7 @@ try {
     else if(e==='thinking'){t.innerText='PROCESANDO…';objetivo=0.6;}
     else if(e==='speaking'){t.innerText='RESPONDIENDO…';objetivo=1;}
     else if(e==='offline'){t.innerText='DESCONECTADO';objetivo=0;}
+    else if(e==='muted'){t.innerText='MODO SILENCIO — PARTIDA EN CURSO';objetivo=0;}
     else {t.innerText='SISTEMAS EN LÍNEA';objetivo=0;}
   };
 
@@ -166,7 +167,7 @@ try {
   // suelto, el fetch falla y se queda el modo demo de siempre.
   let demo=['online','listening','thinking','speaking'],di=0;
   let demoTimer=setInterval(()=>window.setEstado(demo[di++%demo.length]),3000);
-  const MAPA={esperando:'online',escuchando:'listening',pensando:'thinking',hablando:'speaking',apagado:'offline'};
+  const MAPA={esperando:'online',escuchando:'listening',pensando:'thinking',hablando:'speaking',apagado:'offline',silencio:'muted'};
   const dlg=document.getElementById('dialogo');
   async function refrescar(){
     try{
