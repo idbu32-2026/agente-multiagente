@@ -545,6 +545,67 @@ class CerebroActuador(Cerebro):
 # ===========================================================================
 #  VOZ DE SALIDA: pyttsx3 (local, gratis). Provisional hasta ElevenLabs.
 # ===========================================================================
+class CerebroLocal:
+    """Cerebro de RESPALDO sin Claude (pedido por Luis, 12-jun): Ollama local.
+
+    Si Claude (o internet) falla, JARVIS no se queda mudo: responde charla
+    basica con un modelo local corriendo en la grafica del PC. Limites
+    DELIBERADOS de este modo (el modelo los conoce y los dice): sin busqueda
+    web, sin datos actuales, sin tocar el PC, respuestas cortas. El modo
+    ninos NO usa este respaldo (un modelo local no garantiza filtro
+    infantil). Modelo en JARVIS_CEREBRO_LOCAL (defecto llama3.1:8b, ya
+    descargado); Ollama arranca con Windows. Llamada HTTP bloqueante con
+    timeout — el bucle de voz es sincrono en este punto, no hace falta async.
+    """
+
+    def __init__(self) -> None:
+        self._url = os.getenv("JARVIS_OLLAMA_URL", "http://127.0.0.1:11434")
+        self._modelo = os.getenv("JARVIS_CEREBRO_LOCAL", "llama3.1:8b")
+        self._historia: list[dict] = []
+
+    def _sistema(self) -> str:
+        return (
+            f"Eres Jarvis, el asistente de voz de {USER_NAME}, funcionando en "
+            "MODO LOCAL de emergencia porque tu cerebro principal esta caido. "
+            "Hablas espanol, 2-3 frases como maximo (es voz). En este modo NO "
+            "tienes internet, ni datos actuales, ni puedes tocar el ordenador: "
+            "si te piden algo de eso, di que estas en modo local y que lo "
+            "reintenten en un rato. NUNCA inventes datos: si no sabes algo, "
+            "di que no lo sabes." + _prompt_memoria()
+        )
+
+    def preguntar(self, texto: str, timeout: int = 60) -> str:
+        """Un turno contra Ollama. Devuelve '' si el local tampoco responde."""
+        import urllib.request
+
+        self._historia.append({"role": "user", "content": texto})
+        cuerpo = json.dumps({
+            "model": self._modelo,
+            "stream": False,
+            "messages": ([{"role": "system", "content": self._sistema()}]
+                         + self._historia[-10:]),
+            "options": {"num_predict": 220},
+            # Mantener el modelo cargado en la grafica: la 1a respuesta tarda
+            # ~45s (carga); con esto las siguientes bajan a pocos segundos.
+            "keep_alive": "30m",
+        }).encode("utf-8")
+        try:
+            peticion = urllib.request.Request(
+                self._url + "/api/chat", data=cuerpo,
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(peticion, timeout=timeout) as r:
+                contenido = json.loads(r.read().decode("utf-8"))
+            respuesta = (contenido.get("message") or {}).get("content", "").strip()
+        except Exception as e:
+            print(f"[local] Ollama tampoco responde: {e}", flush=True)
+            self._historia.pop()  # el turno no llego a existir
+            return ""
+        if respuesta:
+            self._historia.append({"role": "assistant", "content": respuesta})
+            _guardar_en_memoria(texto, f"(modo local) {respuesta}")
+        return respuesta
+
+
 def _texto_hablable(texto: str) -> str:
     """Limpia marcas de escritura (markdown) que el altavoz leeria en voz alta.
 
@@ -1107,7 +1168,22 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
         cerebro: Cerebro = CerebroActuador(ask_human)
     else:
         cerebro = Cerebro(ninos=ninos)
-    loop.run_until_complete(cerebro.abrir())
+    # Respaldo sin Claude (modo ninos NO lo usa: sin filtro infantil local).
+    local = None if ninos else CerebroLocal()
+    modo_local = False
+    try:
+        loop.run_until_complete(cerebro.abrir())
+    except Exception as e:
+        print(f"[cerebro] No se pudo abrir el cerebro principal: {e}", flush=True)
+        modo_local = local is not None
+
+    async def _reabrir_cerebro() -> None:
+        """Cierra (si procede) y reabre el cerebro principal."""
+        try:
+            await cerebro.cerrar()
+        except Exception:
+            pass
+        await cerebro.abrir()
 
     def _reconectar_cerebro(aviso: str) -> None:
         """Avisa por voz, cierra la sesion del cerebro y abre una nueva.
@@ -1151,6 +1227,9 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
         voz.decir(f"Aviso, {USER_NAME}: no me llega ningun sonido del microfono. "
                   "Asi no podre oirte. Revisa que el micro este conectado.")
     voz.decir(f"Hola {USER_NAME}. Soy {nombre}. Te escucho.")
+    if modo_local:
+        voz.decir("Aviso: arranco sin mi cerebro principal, en modo local — "
+                  "sin internet ni acciones hasta que se recupere.")
 
     try:
         while True:
@@ -1197,6 +1276,29 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
                 _escribir_estado("esperando", texto)
                 continue
             _escribir_estado("pensando", texto)
+            # MODO LOCAL (respaldo sin Claude, pedido por Luis 12-jun): si el
+            # cerebro principal esta caido, primero se intenta recuperar (12s
+            # como mucho) y, si no vuelve, responde el modelo local de Ollama.
+            if modo_local and local is not None:
+                try:
+                    loop.run_until_complete(
+                        asyncio.wait_for(_reabrir_cerebro(), timeout=12))
+                    modo_local = False
+                    voz.decir("Mi cerebro principal ha vuelto. Modo completo otra vez.")
+                except Exception:
+                    voz.decir("Dame unos segundos.")  # la carga local puede tardar
+                    respuesta = local.preguntar(texto)
+                    if respuesta:
+                        _escribir_estado("hablando", texto, respuesta)
+                        voz.decir(respuesta)
+                        _drenar_microfono(recorder)
+                        _escribir_estado("esperando", texto, respuesta)
+                    else:
+                        voz.decir(f"Sigo sin cerebro principal y el local "
+                                  f"tampoco me responde, {USER_NAME}. Revisa "
+                                  "internet u Ollama.")
+                        _escribir_estado("esperando")
+                    continue
             # Un fallo del cerebro (sin internet, error de API, SDK caido) NO
             # debe matar a JARVIS: es un asistente siempre activo. Se avisa por
             # voz, se reconecta y se sigue escuchando.
@@ -1239,8 +1341,19 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             except Exception as e:
                 print(f"[cerebro] Error en el turno: {e}", flush=True)
                 _apuntar_leccion("CEREBRO", f"error de conexion ({e}) con: {texto}")
-                _reconectar_cerebro("He perdido la conexion con mi cerebro. Dame un momento, lo reinicio.")
-                _escribir_estado("esperando")
+                # Antes de molestar con una reconexion hablada, que el local
+                # salve el turno; el proximo turno intentara volver a Claude.
+                respuesta = local.preguntar(texto) if local is not None else ""
+                if respuesta:
+                    modo_local = True
+                    voz.decir("Mi cerebro principal ha fallado; sigo contigo "
+                              "en modo local, sin internet ni acciones. "
+                              + respuesta)
+                    _drenar_microfono(recorder)
+                    _escribir_estado("esperando", texto, respuesta)
+                else:
+                    _reconectar_cerebro("He perdido la conexion con mi cerebro. Dame un momento, lo reinicio.")
+                    _escribir_estado("esperando")
                 continue
             t_respuesta = time.time() - t_pensando
             print(f"[cerebro] Respondio en {t_respuesta:.1f}s", flush=True)
