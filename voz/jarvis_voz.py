@@ -1093,11 +1093,21 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
             _drenar_microfono(recorder)          # anti-eco: descarta el "¿Sí?"
             audio = _grabar_mandato(recorder)
             # (Hubo un bip aqui como "te he oido"; Luis pidio quitarlo 12-jun.)
+            if not audio:
+                # FALSO DESPERTAR (1a mejora salida de la automejora, aprobada
+                # por Luis 12-jun): desperto por ruido de fondo y nadie hablo
+                # despues. Antes interrumpia la habitacion con "No te he
+                # entendido"; ahora vuelve a escuchar EN SILENCIO y lo apunta.
+                _apuntar_leccion("FALSO DESPERTAR", "desperte sin que hubiera "
+                                 "voz despues (ruido de fondo); volvi a "
+                                 "escuchar sin hablar")
+                _escribir_estado("esperando")
+                continue
             texto = _transcribir(whisper, audio)
             if not texto:
                 voz.decir(f"No te he entendido, {USER_NAME}.")
-                _apuntar_leccion("OIDO", "capte audio tras la palabra clave "
-                                 "pero no entendi nada (ruido o transcripcion)")
+                _apuntar_leccion("OIDO", "capte voz tras la palabra clave "
+                                 "pero no la entendi (ruido o transcripcion)")
                 _escribir_estado("esperando")
                 continue
             print(f"{USER_NAME}> {texto}")
