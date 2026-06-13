@@ -953,42 +953,63 @@ class _MicroMuerto(Exception):
 
 
 class _VigiaOido:
-    """Detector de microfono muerto (leccion de la sordera del 12-jun).
+    """Detector de microfono REALMENTE muerto (leccion sordera 12-jun;
+    correccion por falsa alarma de silencio nocturno 13-jun).
 
     Un flujo de audio degradado entrega ceros SIN dar error: Jarvis se queda
     sordo y nadie lo nota (paso de 15:00 a 15:08 y hubo que reiniciar a mano).
-    Cada ~30s de escucha se mira el nivel medio del audio; DOS ventanas
-    seguidas practicamente a cero = micro muerto -> _MicroMuerto, y el bucle
-    principal avisa por voz y sale con codigo 3 para que el vigilante lo
-    relance con el audio reabierto. El ambiente real de este micro ronda
-    13-53; un flujo muerto da ~0. Umbral en JARVIS_OIDO_MIN (defecto 2).
+    PERO mirar solo el VOLUMEN era un error: una habitacion en silencio de
+    verdad tambien da niveles ~0 con un micro perfectamente sano. La noche del
+    12->13 el vigia mato a Jarvis cada pocos minutos por silencio real (niveles
+    0.00-1.84, fluctuando) hasta que el vigilante se rindio a las 03:17 y dejo
+    a Jarvis apagado toda la mañana.
+
+    Distincion clave: un micro MUERTO entrega una señal PLANA (todos los
+    valores casi iguales, desviacion ~0); un micro VIVO, aun en una habitacion
+    callada, tiene ruido de fondo que FLUCTUA (desviacion > 0). Por eso ahora
+    se vigila la DESVIACION media por frame, no el volumen, y solo se da por
+    muerto si el audio sigue plano durante varios MINUTOS seguidos (una noche
+    silenciosa fluctua; un stream congelado no). Asi nunca mata por silencio.
+    Umbrales en JARVIS_OIDO_PLANO (defecto 0.5) y JARVIS_OIDO_VENTANAS (10).
     """
 
     def __init__(self, frame_length: int) -> None:
         self._cada = max(1, int(30 * SAMPLE_RATE / frame_length))  # ~30s
-        self._minimo = float(os.getenv("JARVIS_OIDO_MIN", "2"))
-        self._suma = 0.0
+        # Por debajo de esta desviacion el audio se considera PLANO (muerto).
+        # El ruido de fondo de cualquier micro vivo la supera con holgura.
+        self._plano = float(os.getenv("JARVIS_OIDO_PLANO", "0.5"))
+        # Ventanas planas SEGUIDAS para darlo por muerto (10 * 30s = ~5 min).
+        self._ventanas_muerto = max(2, int(os.getenv("JARVIS_OIDO_VENTANAS", "10")))
+        self._suma_desv = 0.0
+        self._suma_nivel = 0.0
         self._frames = 0
         self._muertas = 0
 
     def chequear(self, frame) -> None:
         import numpy as np
 
-        self._suma += float(np.abs(np.asarray(frame, dtype=np.int32)).mean())
+        arr = np.asarray(frame, dtype=np.float64)
+        self._suma_desv += float(arr.std())          # fluctuacion = señal viva
+        self._suma_nivel += float(np.abs(arr).mean())  # solo para el log
         self._frames += 1
         if self._frames < self._cada:
             return
-        nivel = self._suma / self._frames
-        self._suma = 0.0
+        desviacion = self._suma_desv / self._frames
+        nivel = self._suma_nivel / self._frames
+        self._suma_desv = 0.0
+        self._suma_nivel = 0.0
         self._frames = 0
-        if nivel >= self._minimo:
+        if desviacion >= self._plano:   # hay fluctuacion -> micro VIVO
             self._muertas = 0
             return
         self._muertas += 1
-        print(f"[oido] 30s con nivel medio {nivel:.2f} — micro sospechoso "
-              f"({self._muertas}/2).", flush=True)
-        if self._muertas >= 2:
-            raise _MicroMuerto(f"nivel medio {nivel:.2f} durante un minuto")
+        print(f"[oido] 30s de audio PLANO (desv {desviacion:.2f}, nivel "
+              f"{nivel:.2f}) — micro sospechoso "
+              f"({self._muertas}/{self._ventanas_muerto}).", flush=True)
+        if self._muertas >= self._ventanas_muerto:
+            minutos = self._ventanas_muerto * 30 // 60
+            raise _MicroMuerto(
+                f"audio plano (desv {desviacion:.2f}) durante ~{minutos} min")
 
 
 def _esperar_palabra_clave(recorder, motor_nombre: str, motor) -> bool:
@@ -1372,8 +1393,8 @@ def bucle_jarvis(actuar: bool = False, ninos: bool = False) -> None:
               "me relance con el audio reabierto.", flush=True)
         _apuntar_leccion("SORDERA", f"micro muerto ({e}); me reinicie solo "
                          "via vigilante para reabrir el audio")
-        voz.decir(f"{USER_NAME}, llevo un minuto sin captar nada por el "
-                  "microfono. Me reinicio para arreglarlo.")
+        voz.decir(f"{USER_NAME}, llevo varios minutos con el microfono "
+                  "congelado. Me reinicio para arreglarlo.")
         sys.exit(3)
     finally:
         _escribir_estado("apagado")  # el HUD muestra DESCONECTADO, no "en linea"
